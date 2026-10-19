@@ -5,7 +5,6 @@ local Main = Context.Main
 local Lib = Context.Lib
 local service = Context.service
 local plr = Context.plr
-local cloneref = Context.cloneref
 local create = Create.create
 
 local funcs = {}
@@ -384,13 +383,13 @@ local createGui = function(self)
 
 			local alignInsertPos, alignInsertSide
 
-			guiDragging = true
+			self.Dragging = true
 
-			releaseEvent = cloneref(game:GetService("UserInputService")).InputEnded:Connect(function(input)
+			releaseEvent = service.UserInputService.InputEnded:Connect(function(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton1 then
 					releaseEvent:Disconnect()
 					mouseEvent:Disconnect()
-					guiDragging = false
+					self.Dragging = false
 					alignIndicator.Parent = nil
 					if alignInsertSide then
 						local targetSide = (alignInsertSide == "left" and leftSide) or (alignInsertSide == "right" and rightSide)
@@ -399,7 +398,7 @@ local createGui = function(self)
 				end
 			end)
 
-			mouseEvent = cloneref(game:GetService("UserInputService")).InputChanged:Connect(function(input)
+			mouseEvent = service.UserInputService.InputChanged:Connect(function(input)
 				if input.UserInputType == Enum.UserInputType.MouseMovement and self.Draggable and not self.Closed then
 					if self.Aligned then
 						if leftSide.Resizing or rightSide.Resizing then return end
@@ -904,7 +903,7 @@ funcs.Close = function(self)
 		self:StopTweens()
 		local ti = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
-		local closeTime = tick()
+		local closeTime = os.clock()
 		self.LastClose = closeTime
 
 		self:DoTween(self.GuiElems.Main, ti, { Size = UDim2.new(0, self.SizeX, 0, 20) })
@@ -958,7 +957,7 @@ funcs.Show = function(self, data) return static.ShowWindow(self, data) end
 
 funcs.ShowAndFocus = function(self, data)
 	static.ShowWindow(self, data)
-	service.RunService.RenderStepped:wait()
+	service.RunService.RenderStepped:Wait()
 	self:Focus()
 end
 
@@ -979,7 +978,7 @@ static.ShowWindow = function(window, data)
 	end
 
 	window.Closed = false
-	window.LastClose = tick()
+	window.LastClose = os.clock()
 	window.GuiElems.Title.TextTransparency = 0
 	window.GuiElems.Minimize.ImageLabel.ImageTransparency = 0
 	window.GuiElems.Close.ImageLabel.ImageTransparency = 0
@@ -1120,13 +1119,15 @@ static.Init = function()
 
 	alignIndicator = Instance.new("ScreenGui")
 	alignIndicator.DisplayOrder = Main.DisplayOrders.Core
-	local indicator = Instance.new("Frame", alignIndicator)
+	local indicator = Instance.new("Frame")
 	indicator.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
 	indicator.BorderSizePixel = 0
 	indicator.BackgroundTransparency = 0.8
 	indicator.Name = "Indicator"
-	local corner = Instance.new("UICorner", indicator)
+	local corner = Instance.new("UICorner")
 	corner.CornerRadius = UDim.new(0, 10)
+	corner.Parent = indicator
+	indicator.Parent = alignIndicator
 
 	local leftToggle = create({
 		{

@@ -319,8 +319,7 @@ local function main()
 								propVal = getAttribute(obj, attributeName)
 								if propVal == nil then skip = true end
 							elseif IsTag then
-								local _ = CollectionService:GetTags(obj)
-								propVal = table.find(_, attributeName) and _[table.find(_, attributeName)]
+								propVal = CollectionService:HasTag(obj, attributeName) and attributeName or nil
 								if propVal == nil then skip = true end
 							else
 								propVal = obj[propName]
@@ -479,7 +478,7 @@ local function main()
 				local tags = CollectionService:GetTags(obj)
 				for _, name in pairs(tags) do
 					if not foundTags[name] then
-						local tagProp = { IsTag = true, Name = "TAG_" .. name, AttributeName = name, DisplayName = _, Class = "Instance", ValueType = { Name = "string" }, Category = "Tags", Tags = {} }
+						local tagProp = { IsTag = true, Name = "TAG_" .. name, AttributeName = name, DisplayName = name, Class = "Instance", ValueType = { Name = "string" }, Category = "Tags", Tags = { ReadOnly = true } }
 						props[propCount] = tagProp
 						propCount = propCount + 1
 						tagCount = tagCount + 1
@@ -507,7 +506,7 @@ local function main()
 		-- Find conflicts and get auto-update instances
 		Properties.ClassLists = classLists
 		Properties.ComputeConflicts()
-		--warn("CONFLICT",tick()-start)
+		--warn("CONFLICT",os.clock()-start)
 		if #props > 0 then props[#props + 1] = Properties.AddAttributeProp end
 
 		Properties.Update()
@@ -550,10 +549,7 @@ local function main()
 	end
 
 	Properties.MakeSubProp = function(prop, subName, valueType, displayName)
-		local subProp = {}
-		for i, v in pairs(prop) do
-			subProp[i] = v
-		end
+		local subProp = table.clone(prop)
 		subProp.RootType = subProp.RootType or subProp.ValueType
 		subProp.ValueType = valueType
 		subProp.SubName = subProp.SubName and (subProp.SubName .. subName) or subName
@@ -939,7 +935,7 @@ local function main()
 			if not noplay then sound:Resume() end
 
 			coroutine.wrap(function()
-				local previewTime = tick()
+				local previewTime = os.clock()
 				Properties.SoundPreviewTime = previewTime
 				while previewTime == Properties.SoundPreviewTime and sound.Playing do
 					local entry = Properties.GetSoundPreviewEntry()
@@ -961,7 +957,9 @@ local function main()
 			context = Lib.ContextMenu.new()
 			context.Iconless = true
 			context.Width = 80
+			Properties.AttributeContext = context
 		end
+
 		context:Clear()
 
 		context:Add({ Name = "Edit", OnClick = function() Properties.DisplayAddAttributeWindow(prop) end })
@@ -1076,7 +1074,7 @@ local function main()
 			context.Iconless = true
 			context.MaxHeight = 200
 			context.ReverseYOffset = 22
-			Properties.EnumDropdown = context
+			Properties.EnumContext = context
 		end
 
 		if not inputProp or inputProp.ValueType.Category ~= "Enum" then return end
@@ -1256,13 +1254,8 @@ local function main()
 				return nil
 			end
 		elseif prop.IsTag then
-			local _ = CollectionService:GetTags(obj)
-			propVal = table.find(_, prop.AttributeName) and _[table.find(_, prop.AttributeName)]
-			if not propVal then return nil end
-
-			local typ = typeof(propVal)
-			local currentType = Properties.TypeNameConvert[typ] or typ
-			if prop.ValueType.Name ~= currentType then return nil end
+			if not CollectionService:HasTag(obj, prop.AttributeName) then return nil end
+			propVal = prop.AttributeName
 		else
 			propVal = obj[prop.Name]
 		end
@@ -1533,8 +1526,6 @@ local function main()
 							elseif prop.IsTag then
 								propCons[#propCons + 1] = CollectionService:GetInstanceAddedSignal(prop.AttributeName):Connect(function() Properties.DisplayProp(prop, i) end)
 								propCons[#propCons + 1] = CollectionService:GetInstanceRemovedSignal(prop.AttributeName):Connect(function() Properties.DisplayProp(prop, i) end)
-								propCons[#propCons + 1] = CollectionService.TagAdded:Connect(function() Properties.DisplayProp(prop, i) end)
-								propCons[#propCons + 1] = CollectionService.TagRemoved:Connect(function() Properties.DisplayProp(prop, i) end)
 							else
 								propCons[#propCons + 1] = getPropChangedSignal(propObj, propName):Connect(function() Properties.DisplayProp(prop, i) end)
 							end
@@ -1625,8 +1616,7 @@ local function main()
 					if prop.IsAttribute then
 						root = getAttribute(obj, attributeName)
 					elseif prop.IsTag then
-						local _ = CollectionService:GetTags(obj)
-						root = table.find(_, attributeName) and _[table.find(_, attributeName)]
+						root = CollectionService:HasTag(obj, attributeName) and attributeName or nil
 					else
 						root = obj[propName]
 					end
@@ -1653,8 +1643,13 @@ local function main()
 							local pos = (subName == ".Position" and setVal) or Vector3.new((subName == ".Position.X" and setVal) or rootPos.X, (subName == ".Position.Y" and setVal) or rootPos.Y, (subName == ".Position.Z" and setVal) or rootPos.Z)
 							local rightV = (subName == ".RightVector" and setVal) or Vector3.new((subName == ".RightVector.X" and setVal) or rootRight.X, (subName == ".RightVector.Y" and setVal) or rootRight.Y, (subName == ".RightVector.Z" and setVal) or rootRight.Z)
 							local upV = (subName == ".UpVector" and setVal) or Vector3.new((subName == ".UpVector.X" and setVal) or rootUp.X, (subName == ".UpVector.Y" and setVal) or rootUp.Y, (subName == ".UpVector.Z" and setVal) or rootUp.Z)
-							local lookV = (subName == ".LookVector" and setVal) or Vector3.new((subName == ".LookVector.X" and setVal) or rootLook.X, (subName == ".RightVector.Y" and setVal) or rootLook.Y, (subName == ".RightVector.Z" and setVal) or rootLook.Z)
-							setVal = CFrame.fromMatrix(pos, rightV, upV, -lookV)
+							local lookV = (subName == ".LookVector" and setVal) or Vector3.new((subName == ".LookVector.X" and setVal) or rootLook.X, (subName == ".LookVector.Y" and setVal) or rootLook.Y, (subName == ".LookVector.Z" and setVal) or rootLook.Z)
+							-- fromMatrix derives the back vector from Right x Up, so a LookVector edit rebuilds the rotation
+							if string.sub(subName, 1, 11) == ".LookVector" then
+								setVal = CFrame.lookAt(pos, pos + lookV, rootUp)
+							else
+								setVal = CFrame.fromMatrix(pos, rightV, upV)
+							end
 						elseif rootTypeName == "Rect" then
 							local rootMin, rootMax = root.Min, root.Max
 							local min = Vector2.new((subName == ".Min.X" and setVal) or rootMin.X, (subName == ".Min.Y" and setVal) or rootMin.Y)

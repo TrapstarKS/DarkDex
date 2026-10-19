@@ -1,4 +1,4 @@
-std = "customroblox+exploit"
+std = "customroblox+exploit+darkdex"
 exclude = ["dist/*"]
 
 [lints]

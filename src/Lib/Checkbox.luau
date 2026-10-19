@@ -15,7 +15,6 @@ local max = math.max
 local new = Instance.new
 local TweenSize = new("Frame").TweenSize
 local ti = TweenInfo.new
-local delay = delay
 
 local function ripple(object, color)
 	local circle = new("Frame")
@@ -203,7 +202,7 @@ funcs.SetState = function(self, val, anim)
 	self.Toggled = val
 
 	if self.OutlineColorTween then self.OutlineColorTween:Cancel() end
-	local setStateTime = tick()
+	local setStateTime = os.clock()
 	self.LastSetStateTime = setStateTime
 
 	if self.Toggled then
@@ -211,7 +210,7 @@ funcs.SetState = function(self, val, anim)
 			if anim then
 				self.OutlineColorTween = service.TweenService:Create(self.GuiElems.Outline, ti(4 / 15, Enum.EasingStyle.Circular, Enum.EasingDirection.Out), { BackgroundColor3 = self.Colors.Primary })
 				self.OutlineColorTween:Play()
-				delay(0.15, function()
+				task.delay(0.15, function()
 					if setStateTime ~= self.LastSetStateTime then return end
 					self:Paint()
 					TweenSize(self.GuiElems.Checkmark, ud2o(14, 20), "Out", "Bounce", 2 / 15, true)
@@ -232,7 +231,7 @@ funcs.SetState = function(self, val, anim)
 			if anim then
 				self.OutlineColorTween = service.TweenService:Create(self.GuiElems.Outline, ti(4 / 15, Enum.EasingStyle.Circular, Enum.EasingDirection.In), { BackgroundColor3 = self.Colors.Secondary })
 				self.OutlineColorTween:Play()
-				delay(0.15, function()
+				task.delay(0.15, function()
 					if setStateTime ~= self.LastSetStateTime then return end
 					self:Paint()
 					TweenSize(self.GuiElems.Checkmark, ud2o(0, 20), "Out", "Quad", 1 / 15, true)
@@ -272,20 +271,4 @@ local function new(style)
 	return obj
 end
 
-local function fromFrame(frame)
-	local obj = setmetatable({
-		Toggled = false,
-		Disabled = false,
-		Colors = {
-			Background = c3(36, 36, 36),
-			Primary = c3(49, 176, 230),
-			Secondary = c3(25, 25, 25),
-			Disabled = c3(64, 64, 64),
-			DisabledBackground = c3(52, 52, 52),
-		},
-	}, mt)
-	initGui(obj, frame)
-	return obj
-end
-
-return { new = new, fromFrame }
+return { new = new }

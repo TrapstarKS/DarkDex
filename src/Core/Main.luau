@@ -43,7 +43,8 @@ Main.DisplayOrders = {
 }
 
 local trackedConnections: { RBXScriptConnection } = {}
-local shownGuis: { ScreenGui } = {}
+-- Weak keys: guis destroyed while running must not be kept alive by this set
+local shownGuis: { [ScreenGui]: true } = setmetatable({}, { __mode = "k" }) :: any
 
 -- Keeps a connection to a global signal so Destroy can disconnect it
 function Main.Track(connection: RBXScriptConnection): RBXScriptConnection
@@ -52,7 +53,9 @@ function Main.Track(connection: RBXScriptConnection): RBXScriptConnection
 end
 
 function Main.ShowGui(gui: ScreenGui)
-	table.insert(shownGuis, gui)
+	-- Called on every window update, so only the first call protects and parents the gui
+	if shownGuis[gui] and gui.Parent then return end
+	shownGuis[gui] = true
 
 	if env.gethui then
 		gui.Parent = env.gethui()
@@ -76,7 +79,7 @@ function Main.Destroy()
 		if type(app) == "table" and app.Destroy then pcall(app.Destroy) end
 	end
 
-	for _, gui in shownGuis do
+	for gui in shownGuis do
 		gui:Destroy()
 	end
 	table.clear(shownGuis)
@@ -156,7 +159,7 @@ local function createIcons()
 end
 
 function Main.Init()
-	Main.Elevated = pcall(function() return Context.cloneref(game:GetService("CoreGui")):GetFullName() end)
+	Main.Elevated = pcall(function() return Context.service.CoreGui:GetFullName() end)
 	Main.GuiHolder = Main.Elevated and service.CoreGui or plr:FindFirstChildWhichIsA("PlayerGui")
 
 	Env.init()

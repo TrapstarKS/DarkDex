@@ -2,7 +2,7 @@ local Context = require("@core/Context")
 local Create = require("@core/Create")
 
 local Lib = Context.Lib
-local cloneref = Context.cloneref
+local service = Context.service
 local create = Create.create
 
 -- TODO: Convert to newer class model
@@ -183,8 +183,8 @@ local function new()
 	local closeButton = pickerFrame.Close
 	local topClose = pickerTopBar.Close
 
-	local user = cloneref(game:GetService("UserInputService"))
-	local mouse = cloneref(game:GetService("Players")).LocalPlayer:GetMouse()
+	local user = service.UserInputService
+	local mouse = service.Players.LocalPlayer:GetMouse()
 
 	local colors = { { Color3.new(1, 0, 1), 0 }, { Color3.new(0.2, 0.9, 0.2), 0.2 }, { Color3.new(0.4, 0.5, 0.9), 0.7 }, { Color3.new(0.6, 1, 1), 1 } }
 	local resetSequence = nil

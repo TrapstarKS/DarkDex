@@ -21,22 +21,16 @@ local props = {
 	LastButton = "",
 }
 local funcs = {}
-local tostring = tostring
-
-local disconnect = function(con)
-	local pos = table.find(con.Signal.Connections, con)
-	if pos then table.remove(con.Signal.Connections, pos) end
-end
 
 funcs.Trigger = function(self, item, button)
 	if table.find(self.AllowedButtons, button) then
-		if self.LastButton ~= button or self.LastItem ~= item or self.Combo == self.MaxCombo or tick() - self.ClickId > self.ComboTime then
+		if self.LastButton ~= button or self.LastItem ~= item or self.Combo == self.MaxCombo or os.clock() - self.ClickId > self.ComboTime then
 			self.Combo = 0
 			self.LastButton = button
 			self.LastItem = item
 		end
 		self.Combo = self.Combo + 1
-		self.ClickId = tick()
+		self.ClickId = os.clock()
 
 		local release
 		release = service.UserInputService.InputEnded:Connect(function(input)

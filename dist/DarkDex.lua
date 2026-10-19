@@ -73,6 +73,59 @@ local __DARKDEX_MODULES={cache={}}do do local function __modImpl()--[[
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 local cloneref= cloneref or function(instance) return instance end
 
 local service= setmetatable({}, {
@@ -536,6 +589,7 @@ local DEFAULT_SETTINGS = {
 		TeleportToOffset = Vector3.zero,
 		ClickToRename = true,
 		AutoUpdateSearch = true,
+		LiveSearch = true, -- search while typing instead of on Enter
 		AutoUpdateMode = 0, -- 0 Default, 1 no tree update, 2 no descendant events, 3 frozen
 		PartSelectionBox = true,
 		GuiSelectionBox = true,
@@ -1524,7 +1578,812 @@ end
 function SaveInstance.run(options) SaveInstance.get()(options) end
 
 return SaveInstance
-end function __DARKDEX_MODULES.n()local v=__DARKDEX_MODULES.cache.n if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.n=v end return v.c end end do local function __modImpl()--[[
+end function __DARKDEX_MODULES.n()local v=__DARKDEX_MODULES.cache.n if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.n=v end return v.c end end do local function __modImpl()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+local KEYWORDS = {
+	is = "is",
+	classname = "class",
+	c = "class",
+	tag = "tag",
+	name = "name",
+}
+
+local COMMANDS_WITH_ARGUMENT = {
+	rad = true,
+	isa = true,
+}
+
+-- Longest first so ">=" is not read as ">"
+local OPERATORS = { "==", "~=", "!=", ">=", "<=", "=", ">", "<" }
+local OPERATOR_ALIASES = { ["=="] = "=", ["!="] = "~=" }
+
+local WORD_END = '[%s%(%)"=~<>!&|]'
+
+local Parser = {}
+
+function Parser.tokenize(query)	
+local tokens= {}
+	local index, length = 1, #query
+
+	while index <= length do
+		local char = string.sub(query, index, index)
+		local pair = string.sub(query, index, index + 1)
+
+		if string.find(char, "%s") then
+			index += 1
+		elseif char == "(" or char == ")" then
+			table.insert(tokens, { type = char == "(" and "lparen" or "rparen", value = char })
+			index += 1
+		elseif char == '"' then
+			local parts = {}
+			local cursor = index + 1
+			while true do
+				if cursor > length then return nil, "Unclosed quote" end
+				local current = string.sub(query, cursor, cursor)
+				if current == "\\" and cursor < length then
+					table.insert(parts, string.sub(query, cursor + 1, cursor + 1))
+					cursor += 2
+				elseif current == '"' then
+					break
+				else
+					table.insert(parts, current)
+					cursor += 1
+				end
+			end
+			table.insert(tokens, { type = "string", value = table.concat(parts) })
+			index = cursor + 1
+		elseif pair == "&&" or pair == "||" then
+			table.insert(tokens, { type = pair == "&&" and "and" or "or", value = pair })
+			index += 2
+		else
+			local operator
+			for _, candidate in OPERATORS do
+				if string.sub(query, index, index + #candidate - 1) == candidate then
+					operator = candidate
+					break
+				end
+			end
+
+			if operator then
+				table.insert(tokens, { type = "op", value = OPERATOR_ALIASES[operator] or operator })
+				index += #operator
+			elseif char == "!" then
+				table.insert(tokens, { type = "not", value = char })
+				index += 1
+			elseif char == "&" or char == "|" or char == "~" then
+				-- A lone & | ~ is part of a name
+				table.insert(tokens, { type = "word", value = char })
+				index += 1
+			else
+				local wordEnd = (string.find(query, WORD_END, index) or length + 1) - 1
+				local word = string.sub(query, index, wordEnd)
+				local lower = string.lower(word)
+				if lower == "and" or lower == "or" or lower == "not" then
+					table.insert(tokens, { type = lower , value = word })
+				else
+					table.insert(tokens, { type = "word", value = word })
+				end
+				index = wordEnd + 1
+			end
+		end
+	end
+
+	return tokens, nil
+end
+
+local function isPath(word)	-- A number such as 1.5 is a name, not a path
+	
+return string.find(word, ".", 1, true) ~= nil and tonumber(word) == nil and not string.find(word, "^%.") and not string.find(word, "%.$")
+end
+
+function Parser.parse(query)	
+local tokens, tokenizeError = Parser.tokenize(query)
+	if not tokens then return nil, tokenizeError end
+	if #tokens == 0 then return nil, nil end
+
+	local position = 1
+
+	local function peek()return tokens[position] end
+
+	local function advance()		
+local token = tokens[position]
+		position += 1
+		return token
+	end
+
+	local function isValueToken(token)return token ~= nil and (token.type == "word" or token.type == "string") end
+
+	local parseOr
+
+	local function parsePrimary()		
+local token = advance()
+		if not token then error("Unexpected end of search", 0) end
+
+		if token.type == "lparen" then
+			local expr = parseOr()
+			local closing = advance()
+			if not closing or closing.type ~= "rparen" then error("Unclosed parenthesis", 0) end
+			return expr
+		elseif token.type == "string" then
+			return { kind = "name", value = token.value }
+		elseif token.type ~= "word" then
+			error(`Unexpected "{token.value}"`, 0)
+		end
+
+		local word = token.value
+
+		local command = string.match(word, "^/(%a+)$")
+		if command then
+			command = string.lower(command)
+			local arg
+			if COMMANDS_WITH_ARGUMENT[command] and isValueToken(peek()) then arg = advance().value end
+			if command == "isa" then return { kind = "keyword", keyword = "is", value = arg or "" } end
+			return { kind = "command", name = command, arg = arg }
+		end
+
+		local keywordName, keywordValue = string.match(word, "^(%a+):(.*)$")
+		local keyword = keywordName and KEYWORDS[string.lower(keywordName)]
+		if keyword then
+			if keywordValue == "" then
+				if not isValueToken(peek()) then error(`Missing value after {keywordName}:`, 0) end
+				keywordValue = advance().value
+			end
+			return { kind = "keyword", keyword = keyword, value = keywordValue }
+		end
+
+		local nextToken = peek()
+		if nextToken and nextToken.type == "op" then
+			advance()
+			local value = isValueToken(peek()) and advance().value or ""
+			local propertyName = string.gsub(word, "^%.", "")
+			return { kind = "property", path = string.split(propertyName, "."), op = (nextToken.value ), value = value }
+		end
+
+		if isPath(word) then return { kind = "path", segments = string.split(word, ".") } end
+
+		return { kind = "name", value = word }
+	end
+
+	local function parseUnary()		
+local token = peek()
+		if token and token.type == "not" then
+			advance()
+			return { kind = "not", expr = parseUnary() }
+		end
+		return parsePrimary()
+	end
+
+	local function parseAnd()		
+local left = parseUnary()
+		while true do
+			local token = peek()
+			if not token or token.type == "rparen" or token.type == "or" then break end
+			if token.type == "and" then advance() end
+			left = { kind = "and", left = left, right = parseUnary() }
+		end
+		return left
+	end
+
+	function parseOr()		
+local left = parseAnd()
+		while peek() and ((peek() )).type == "or" do
+			advance()
+			left = { kind = "or", left = left, right = parseAnd() }
+		end
+		return left
+	end
+
+	local success, result = pcall(function()
+		local expr = parseOr()
+		local extra = peek()
+		if extra then error(`Unexpected "{extra.value}"`, 0) end
+		return expr
+	end)
+
+	if not success then return nil, tostring(result) end
+	return result, nil
+end
+
+return Parser
+end function __DARKDEX_MODULES.o()local v=__DARKDEX_MODULES.cache.o if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.o=v end return v.c end end do local function __modImpl()--[[
+	Compiles a search query (see Search/Parser) into a predicate over instances.
+
+	Matching follows the Studio Explorer filter: names, strings and enums match partially
+	and case insensitively (an enum value that matches an item exactly only matches that
+	item), booleans accept prefixes such as "t", colors use 0-255 and quoted whole values
+	such as "1, 2, 3" are compared component by component.
+]]
+
+
+local Context = __DARKDEX_MODULES.a()
+local Parser = __DARKDEX_MODULES.o()
+
+local service = Context.service
+local env = Context.env
+
+
+
+local NUMBER_EPSILON = 1e-4
+
+local FIELD_NAMES = {
+	x = "X",
+	y = "Y",
+	z = "Z",
+	r = "R",
+	g = "G",
+	b = "B",
+	scale = "Scale",
+	offset = "Offset",
+	min = "Min",
+	max = "Max",
+	width = "Width",
+	height = "Height",
+	position = "Position",
+	rotation = "Rotation",
+	lookvector = "LookVector",
+	rightvector = "RightVector",
+	upvector = "UpVector",
+	magnitude = "Magnitude",
+	density = "Density",
+	friction = "Friction",
+	elasticity = "Elasticity",
+}
+
+local Query = {}
+
+-- lower-case property name -> real name, per class
+local propertyNameCache= {}
+local classNameCache
+
+local function getClassNames()	
+if classNameCache then return classNameCache end
+
+	local names = {}
+	for className in Context.API.Classes do
+		names[string.lower(className)] = className
+	end
+	classNameCache = names
+	return names
+end
+
+local function resolvePropertyName(className, lowerName)	
+local cache = propertyNameCache[className]
+	if not cache then
+		cache = {}
+		propertyNameCache[className] = cache
+	end
+
+	local cached = cache[lowerName]
+	if cached ~= nil then return cached or nil end
+
+	local apiClass = Context.API.Classes[className]
+	while apiClass do
+		for _, property in apiClass.Properties do
+			if string.lower(property.Name) == lowerName then
+				cache[lowerName] = property.Name
+				return property.Name
+			end
+		end
+		apiClass = apiClass.Superclass
+	end
+
+	cache[lowerName] = false
+	return nil
+end
+
+local function readField(value, fieldName)	
+local valueType = typeof(value)
+	local lowerField = string.lower(fieldName)
+	local realName = FIELD_NAMES[lowerField] or fieldName
+
+	local success, fieldValue = pcall(function() return value[realName] end)
+	if not success then return false, nil end
+
+	-- Studio compares color channels in 0-255
+	if valueType == "Color3" and (lowerField == "r" or lowerField == "g" or lowerField == "b") then
+		fieldValue *= 255
+	end
+	return true, fieldValue
+end
+
+local function readProperty(obj, path)	
+local propertyName = resolvePropertyName(obj.ClassName, string.lower(path[1]))
+	if not propertyName then return false, nil end
+
+	local success, value = pcall(function() return (obj )[propertyName] end)
+	if not success then return false, nil end
+
+	for index = 2, #path do
+		if value == nil then return false, nil end
+		local found
+		found, value = readField(value, path[index])
+		if not found then return false, nil end
+	end
+
+	return true, value
+end
+
+local function parseBoolean(text)	
+local lower = string.lower(text)
+	if lower == "" then return nil end
+	if lower == "1" or lower == "yes" or string.sub("true", 1, #lower) == lower then return true end
+	if lower == "0" or lower == "no" or string.sub("false", 1, #lower) == lower then return false end
+	return nil
+end
+
+local function parseNumbers(text)	
+local numbers = {}
+	for token in string.gmatch(text, "[%-%+]?%d*%.?%d+[eE]?[%-%+]?%d*") do
+		local number = tonumber(token)
+		if number then table.insert(numbers, number) end
+	end
+	return numbers
+end
+
+-- Numeric components of a whole value, colors in 0-255
+local function getComponents(value)	
+if typeof(value) == "Color3" then return { value.R * 255, value.G * 255, value.B * 255 } end
+	if typeof(value) == "CFrame" then return { value:GetComponents() } end
+	return parseNumbers(tostring(value))
+end
+
+local function compareNumbers(a, op, b)	
+if op == "=" then return math.abs(a - b) <= NUMBER_EPSILON end
+	if op == "~=" then return math.abs(a - b) > NUMBER_EPSILON end
+	if op == ">" then return a > b end
+	if op == "<" then return a < b end
+	if op == ">=" then return a >= b - NUMBER_EPSILON end
+	if op == "<=" then return a <= b + NUMBER_EPSILON end
+	return false
+end
+
+local function compareText(text, op, query)	
+text = string.lower(text)
+	query = string.lower(query)
+	if op == "=" then return string.find(text, query, 1, true) ~= nil end
+	if op == "~=" then return string.find(text, query, 1, true) == nil end
+	if op == ">" then return text > query end
+	if op == "<" then return text < query end
+	if op == ">=" then return text >= query end
+	if op == "<=" then return text <= query end
+	return false
+end
+
+local enumExactCache= {}
+
+local function matchesEnum(item, op, query)	
+local lowerQuery = string.lower(query)
+	local enumType = item.EnumType
+
+	local exactNames = enumExactCache[enumType]
+	if not exactNames then
+		exactNames = {}
+		for _, enumItem in enumType:GetEnumItems() do
+			exactNames[string.lower(enumItem.Name)] = true
+		end
+		enumExactCache[enumType] = exactNames
+	end
+
+	local itemName = string.lower(item.Name)
+	local isMatch
+	if exactNames[lowerQuery] then
+		isMatch = itemName == lowerQuery
+	else
+		isMatch = string.find(itemName, lowerQuery, 1, true) ~= nil
+	end
+
+	if op == "=" then return isMatch end
+	if op == "~=" then return not isMatch end
+	return compareText(item.Name, op, query)
+end
+
+local function compareValue(value, op, query)	
+local valueType = typeof(value)
+
+	-- An empty query asks whether the property is empty, e.g. MeshId=
+	if query == "" then
+		local isEmpty = value == nil or value == ""
+		if op == "=" then return isEmpty end
+		if op == "~=" then return not isEmpty end
+		return false
+	end
+
+	if valueType == "boolean" then
+		local expected = parseBoolean(query)
+		if expected == nil then return false end
+		if op == "=" then return value == expected end
+		if op == "~=" then return value ~= expected end
+		return false
+	elseif valueType == "number" then
+		local expected = tonumber(query)
+		return expected ~= nil and compareNumbers(value, op, expected)
+	elseif valueType == "string" then
+		return compareText(value, op, query)
+	elseif valueType == "EnumItem" then
+		return matchesEnum(value, op, query)
+	elseif valueType == "Instance" then
+		return compareText(value.Name, op, query)
+	elseif valueType == "BrickColor" then
+		return compareText(value.Name, op, query)
+	elseif value == nil then
+		return op == "~=" or (op == "=" and string.lower(query) == "nil")
+	end
+
+	local components = getComponents(value)
+	local expected = parseNumbers(query)
+	if #components == 0 or #expected ~= #components then return compareText(tostring(value), op, query) end
+
+	if op == "~=" then
+		for index, component in components do
+			if not compareNumbers(component, "=", expected[index]) then return true end
+		end
+		return false
+	end
+
+	for index, component in components do
+		if not compareNumbers(component, op, expected[index]) then return false end
+	end
+	return true
+end
+
+local function containsName(obj, lowerNeedle)return string.find(string.lower(obj.Name), lowerNeedle, 1, true) ~= nil end
+
+local function compilePath(segments)	
+local lowerSegments = table.create(#segments)
+	for index, segment in segments do
+		lowerSegments[index] = string.lower(segment)
+	end
+
+	local function matchSegment(obj, index)		
+if not obj then return false end
+
+		local segment = lowerSegments[index]
+		if segment == "**" then
+			-- One or more levels: the object itself and any number of its ancestors
+			if index == 1 then return true end
+			local ancestor = obj.Parent
+			while ancestor do
+				if matchSegment(ancestor, index - 1) then return true end
+				ancestor = ancestor.Parent
+			end
+			return false
+		end
+
+		if segment ~= "*" and not containsName(obj, segment) then return false end
+		if index == 1 then return true end
+		return matchSegment(obj.Parent, index - 1)
+	end
+
+	local lastIndex = #lowerSegments
+	return function(obj) return matchSegment(obj, lastIndex) end
+end
+
+local function compileKeyword(keyword, value)	
+local lowerValue = string.lower(value)
+
+	if keyword == "is" then
+		local className = getClassNames()[lowerValue]
+		if not className then
+			return function() return false end
+		end
+		return function(obj) return obj:IsA(className) end
+	elseif keyword == "class" then
+		return function(obj) return string.lower(obj.ClassName) == lowerValue end
+	elseif keyword == "tag" then
+		-- Instances of every tag whose name contains the value
+		local tagged= {}
+		local CollectionService = service.CollectionService
+		for _, tag in CollectionService:GetAllTags() do
+			if string.find(string.lower(tag), lowerValue, 1, true) then
+				for _, instance in CollectionService:GetTagged(tag) do
+					tagged[instance] = true
+				end
+			end
+		end
+		return function(obj) return tagged[obj] == true end
+	end
+
+	return function(obj) return containsName(obj, lowerValue) end
+end
+
+local function compileCommand(name, arg)	
+if name == "remotes" then
+		return function(obj) return obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") or obj:IsA("UnreliableRemoteEvent") end
+	elseif name == "bindables" then
+		return function(obj) return obj:IsA("BindableEvent") or obj:IsA("BindableFunction") end
+	elseif name == "players" then
+		local players = {}
+		for _, player in service.Players:GetPlayers() do
+			players[player] = true
+		end
+		return function(obj) return players[obj] == true end
+	elseif name == "loadedmodules" then
+		if not env.getloadedmodules then return nil, "/loadedmodules needs getloadedmodules" end
+		local modules = {}
+		for _, module in env.getloadedmodules() do
+			modules[module] = true
+		end
+		return function(obj) return modules[obj] == true end
+	elseif name == "rad" then
+		local radius = tonumber(arg)
+		if not radius then return nil, "/rad needs a distance, e.g. /rad 50" end
+		local character = Context.plr.Character
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		if not (root and root:IsA("BasePart")) then return nil, "/rad needs your character" end
+		local origin = root.Position
+		return function(obj) return obj:IsA("BasePart") and ((obj ).Position - origin).Magnitude <= radius end
+	end
+	return nil, `Unknown command /{name}`
+end
+
+local function compileNode(node)	
+local kind = node.kind
+	if kind == "and" then
+		local left, right = compileNode(node.left), compileNode(node.right)
+		return function(obj) return left(obj) and right(obj) end
+	elseif kind == "or" then
+		local left, right = compileNode(node.left), compileNode(node.right)
+		return function(obj) return left(obj) or right(obj) end
+	elseif kind == "not" then
+		local expr = compileNode(node.expr)
+		return function(obj) return not expr(obj) end
+	elseif kind == "name" then
+		local needle = string.lower(node.value)
+		return function(obj) return containsName(obj, needle) end
+	elseif kind == "keyword" then
+		return compileKeyword(node.keyword, node.value)
+	elseif kind == "property" then
+		local path, op, value = node.path, node.op, node.value
+		return function(obj)
+			local found, propertyValue = readProperty(obj, path)
+			return found and compareValue(propertyValue, op, value)
+		end
+	elseif kind == "path" then
+		return compilePath(node.segments)
+	end
+
+	local predicate, err = compileCommand(node.name, node.arg)
+	if not predicate then error(err, 0) end
+	return predicate
+end
+
+-- Returns nil and an error message when the query is invalid, nil and nil when empty
+function Query.compile(query)	
+local ast, parseError = Parser.parse(query)
+	if not ast then return nil, parseError end
+
+	local success, result = pcall(compileNode, ast)
+	if not success then return nil, tostring(result) end
+	return result, nil
+end
+
+return Query
+end function __DARKDEX_MODULES.p()local v=__DARKDEX_MODULES.cache.p if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.p=v end return v.c end end do local function __modImpl()--[[
+	Autocomplete for the Explorer search box.
+
+	get(text) looks at the token being typed and returns completions that replace it:
+	suggested filters for an empty box, classes after is:/c:, tags after tag:, property
+	names, and enum or boolean values after a property operator.
+]]
+
+
+local Context = __DARKDEX_MODULES.a()
+
+local service = Context.service
+
+
+
+
+
+
+
+local MAX_SUGGESTIONS = 50
+
+local SUGGESTED_FILTERS = { "anchored=", "locked=", "transparency=", "material=", "meshId=", "textureId=", "tag:", "is:" }
+local CLASS_KEYWORDS = { is = true, c = true, classname = true }
+local KEYWORDS = { "is:", "c:", "classname:", "tag:", "name:" }
+
+
+
+local propertyIndex
+local propertyNames
+local classList
+
+local function getPropertyIndex()	
+if propertyIndex and propertyNames then return propertyIndex, propertyNames end
+
+	local index, names = {}, {}
+	for _, class in Context.API.Classes do
+		for _, property in class.Properties do
+			local lower = string.lower(property.Name)
+			if not index[lower] then
+				index[lower] = property
+				table.insert(names, property.Name)
+			end
+		end
+	end
+	table.sort(names)
+
+	propertyIndex, propertyNames = index, names
+	return index, names
+end
+
+local function getClassList()	
+if classList then return classList end
+
+	local list = {}
+	for className in Context.API.Classes do
+		table.insert(list, className)
+	end
+	table.sort(list)
+	classList = list
+	return list
+end
+
+-- Items that start with the query first, then items that contain it
+local function filterByQuery(items, query, limit)	
+local lowerQuery = string.lower(query)
+	local startsWith, contains = {}, {}
+
+	for _, item in items do
+		local lowerItem = string.lower(item)
+		if string.sub(lowerItem, 1, #lowerQuery) == lowerQuery then
+			table.insert(startsWith, item)
+			if #startsWith >= limit then break end
+		elseif #contains < limit and string.find(lowerItem, lowerQuery, 1, true) then
+			table.insert(contains, item)
+		end
+	end
+
+	for _, item in contains do
+		if #startsWith >= limit then break end
+		table.insert(startsWith, item)
+	end
+	return startsWith
+end
+
+local function quoteIfNeeded(value)	
+if string.find(value, "^[%w_%-%.]+$") then return value end
+	return `"{string.gsub(value, '"', '\\"')}"`
+end
+
+-- Splits the text into the part before the token being typed and the token itself
+local function splitCurrentToken(text)	
+local tokenStart = 1
+	local inQuote = false
+
+	for index = 1, #text do
+		local char = string.sub(text, index, index)
+		if char == '"' then
+			inQuote = not inQuote
+		elseif not inQuote and (string.find(char, "%s") or char == "(" or char == ")") then
+			tokenStart = index + 1
+		end
+	end
+
+	return string.sub(text, 1, tokenStart - 1), string.sub(text, tokenStart), inQuote
+end
+
+local Suggest = {}
+
+function Suggest.get(text)	
+local results= {}
+	local before, current, inQuote = splitCurrentToken(text)
+
+	if current == "" then
+		if string.find(before, "^%s*$") then
+			for _, filter in SUGGESTED_FILTERS do
+				table.insert(results, { Text = filter, Label = filter })
+			end
+			return results, "Suggested Filters"
+		end
+		return results, nil
+	end
+
+	local keywordName, keywordValue = string.match(current, "^(%a+):(.*)$")
+	if keywordName then
+		local keyword = string.lower(keywordName)
+		local value = string.gsub(keywordValue, '"', "")
+
+		if CLASS_KEYWORDS[keyword] then
+			for _, className in filterByQuery(getClassList(), value, MAX_SUGGESTIONS) do
+				table.insert(results, { Text = `{before}{keywordName}:{className}`, Label = className, ClassIcon = className })
+			end
+			return results, "Classes"
+		elseif keyword == "tag" then
+			local tags = service.CollectionService:GetAllTags()
+			table.sort(tags)
+			for _, tag in filterByQuery(tags, value, MAX_SUGGESTIONS) do
+				table.insert(results, { Text = `{before}{keywordName}:{quoteIfNeeded(tag)}`, Label = tag })
+			end
+			return results, "Tags"
+		end
+		return results, nil
+	end
+
+	if inQuote then return results, nil end
+
+	local dot, propertyPath, operator, value = string.match(current, "^(%.?)([%w_%.]+)([=~<>!]+)(.*)$")
+	if propertyPath then
+		local propertyName = string.split(propertyPath, ".")[1]
+		local info = getPropertyIndex()[string.lower(propertyName)]
+		if not info or propertyPath ~= propertyName then return results, nil end
+
+		local valueType = info.ValueType
+		local options = {}
+		if valueType.Category == "Enum" then
+			local success, enum = pcall(function() return (Enum )[valueType.Name] end)
+			if success and enum then
+				for _, item in enum:GetEnumItems() do
+					table.insert(options, item.Name)
+				end
+				table.sort(options)
+			end
+		elseif valueType.Name == "bool" then
+			options = { "true", "false" }
+		end
+
+		for _, option in filterByQuery(options, (string.gsub(value, '"', "")), MAX_SUGGESTIONS) do
+			table.insert(results, { Text = `{before}{dot}{info.Name}{operator}{option}`, Label = option })
+		end
+		return results, #results > 0 and info.Name or nil
+	end
+
+	local wordDot, word = string.match(current, "^(%.?)([%a_][%w_]*)$")
+	if word then
+		local lowerWord = string.lower(word)
+		if wordDot == "" then
+			for _, keyword in KEYWORDS do
+				if string.sub(keyword, 1, #lowerWord) == lowerWord then table.insert(results, { Text = before .. keyword, Label = keyword }) end
+			end
+		end
+
+		local _, names = getPropertyIndex()
+		for _, name in filterByQuery(names, word, MAX_SUGGESTIONS - #results) do
+			table.insert(results, { Text = `{before}{wordDot}{name}=`, Label = name .. "=" })
+		end
+		return results, nil
+	end
+
+	return results, nil
+end
+
+return Suggest
+end function __DARKDEX_MODULES.q()local v=__DARKDEX_MODULES.cache.q if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.q=v end return v.c end end do local function __modImpl()--[[
 	Explorer App Module
 
 	The main explorer interface
@@ -1534,6 +2393,8 @@ end function __DARKDEX_MODULES.n()local v=__DARKDEX_MODULES.cache.n if not v the
 local Context = __DARKDEX_MODULES.a()
 local Create = __DARKDEX_MODULES.e()
 local SaveInstance = __DARKDEX_MODULES.n()
+local SearchQuery = __DARKDEX_MODULES.p()
+local Suggest = __DARKDEX_MODULES.q()
 
 local Main = Context.Main
 local Lib = Context.Lib
@@ -1542,12 +2403,22 @@ local Settings = Context.Settings
 local env = Context.env
 local service = Context.service
 local plr = Context.plr
-local cloneref = Context.cloneref
 local create = Create.create
 local nodes = Context.Nodes
 local API, RMD
 local Explorer, Properties, ScriptViewer
 local selection
+
+-- Shortens copied paths: workspace and the LocalPlayer instead of their full GetService paths
+local function shortenPath(path)	
+local workspacePrefix = 'game:GetService("Workspace")'
+	if string.sub(path, 1, #workspacePrefix) == workspacePrefix then path = "workspace" .. string.sub(path, #workspacePrefix + 1) end
+
+	local playerPrefix = 'game:GetService("Players").' .. plr.Name
+	if string.sub(path, 1, #playerPrefix) == playerPrefix then path = 'game:GetService("Players").LocalPlayer' .. string.sub(path, #playerPrefix + 1) end
+
+	return path
+end
 
 local function initAfterMain()
 	Explorer = Apps.Explorer
@@ -1558,7 +2429,7 @@ end
 local function main()
 	API, RMD = Context.API, Context.RMD
 	local Explorer = {}
-	local tree, listEntries, explorerOrders, searchResults, specResults = {}, {}, {}, {}, {}
+	local tree, listEntries, explorerOrders, searchResults = {}, {}, {}, {}
 	local expanded
 	local entryTemplate, treeFrame, toolBar, descendantAddedCon, descendantRemovingCon, itemChangedCon
 	local ffa = game.FindFirstAncestorWhichIsA
@@ -1574,6 +2445,7 @@ local function main()
 	local nilMap, nilCons = {}, {}
 	local connectSignal = game.DescendantAdded.Connect
 	local addObject, removeObject, moveObject = nil, nil, nil
+	local pendingDelParents = {}
 
 	addObject = function(root)
 		if nodes[root] then return end
@@ -1682,7 +2554,10 @@ local function main()
 		end
 
 		local par = node.Parent
-		if par then par.HasDel = true end
+		if par and not par.HasDel then
+			par.HasDel = true
+			pendingDelParents[par] = true
+		end
 
 		local function recur(root)
 			for i = 1, #root do
@@ -2117,14 +2992,14 @@ local function main()
 				local listOffsetX = startX - treeFrame.AbsolutePosition.X
 				local listOffsetY = startY - treeFrame.AbsolutePosition.Y
 
-				releaseEvent = cloneref(game:GetService("UserInputService")).InputEnded:Connect(function(input)
+				releaseEvent = service.UserInputService.InputEnded:Connect(function(input)
 					if input.UserInputType == Enum.UserInputType.MouseButton1 then
 						releaseEvent:Disconnect()
 						mouseEvent:Disconnect()
 					end
 				end)
 
-				mouseEvent = cloneref(game:GetService("UserInputService")).InputChanged:Connect(function(input)
+				mouseEvent = service.UserInputService.InputChanged:Connect(function(input)
 					if input.UserInputType == Enum.UserInputType.MouseMovement then
 						local deltaX = mouse.X - startX
 						local deltaY = mouse.Y - startY
@@ -2348,6 +3223,8 @@ local function main()
 
 	Explorer.ViewObj = function(obj) Explorer.ViewNode(nodes[obj]) end
 
+	Explorer.GetNode = function(obj) return nodes[obj] end
+
 	Explorer.MakeNodeVisible = function(node, expandRoot)
 		if not node then return end
 
@@ -2408,7 +3285,10 @@ local function main()
 		context:AddRegistered("COLLAPSE_ALL")
 
 		context:AddDivider()
-		if expanded == Explorer.SearchExpanded then context:AddRegistered("CLEAR_SEARCH_AND_JUMP_TO") end
+		if expanded == Explorer.SearchExpanded then
+			context:AddRegistered("SELECT_SEARCH_MATCHES")
+			context:AddRegistered("CLEAR_SEARCH_AND_JUMP_TO")
+		end
 		if env.setclipboard then
 			context:AddRegistered("COPY_PATH")
 			context:AddRegistered("COPY_NODE")
@@ -2456,7 +3336,7 @@ local function main()
 			IconMap = Explorer.MiscIcons,
 			Icon = "Cut",
 			DisabledIcon = "Cut_Disabled",
-			Shortcut = "Ctrl+Z",
+			Shortcut = "Ctrl+X",
 			OnClick = function()
 				local destroy, clone = game.Destroy, game.Clone
 				local sList, newClipboard = selection.List, {}
@@ -2599,7 +3479,8 @@ local function main()
 				local sList = selection.List
 				if #sList == 0 then return end
 
-				local model = Instance.new("Model", sList[#sList].Obj.Parent)
+				local model = Instance.new("Model")
+				model.Parent = sList[#sList].Obj.Parent
 				for i = 1, #sList do
 					pcall(function() sList[i].Obj.Parent = model end)
 				end
@@ -2639,7 +3520,7 @@ local function main()
 						pcall(function() ch[i].Obj.Parent = par end)
 					end
 
-					node.Obj:Destroy()
+					pcall(node.Obj.Destroy, node.Obj)
 				end
 
 				for i, v in next, selection.List do
@@ -2728,7 +3609,7 @@ local function main()
 						if node.Obj.PrimaryPart then
 							cframe = node.Obj.PrimaryPart.CFrame + Settings.Explorer.TeleportToOffset
 						else
-							cframe = node.Obj:GetModelCFrame() + Settings.Explorer.TeleportToOffset
+							cframe = node.Obj:GetPivot() + Settings.Explorer.TeleportToOffset
 						end
 					end
 
@@ -2759,10 +3640,10 @@ local function main()
 							hrp.CFrame = node.Obj.PrimaryPart.CFrame + Settings.Explorer.TeleportToOffset
 							break
 						else
-							plr:RequestStreamAroundAsync(node.Obj:GetModelCFrame().Position, 1)
+							plr:RequestStreamAroundAsync(node.Obj:GetPivot().Position, 1)
 							-- local part = node.Obj:FindFirstChildWhichIsA("BasePart", true)
 							-- if part and nodes[part] then hrp.CFrame = nodes[part].Obj.CFrame + Settings.Explorer.TeleportToOffset end
-							hrp.CFrame = node.Obj:GetModelCFrame() + Settings.Explorer.TeleportToOffset
+							hrp.CFrame = node.Obj:GetPivot() + Settings.Explorer.TeleportToOffset
 						end
 						break
 					end
@@ -2810,6 +3691,16 @@ local function main()
 			end,
 		})
 
+		context:Register("SELECT_SEARCH_MATCHES", {
+			Name = "Select All Matches",
+			IconMap = Explorer.MiscIcons,
+			Icon = "SelectChildren",
+			OnClick = function()
+				selection:SetTable(Explorer.GetSearchMatches())
+				Explorer.Refresh()
+			end,
+		})
+
 		context:Register("CLEAR_SEARCH_AND_JUMP_TO", {
 			Name = "Clear Search and Jump to",
 			OnClick = function()
@@ -2828,23 +3719,17 @@ local function main()
 			end,
 		})
 
-		local clth = function(str)
-			if str:sub(1, 28) == 'game:GetService("Workspace")' then str = str:gsub('game:GetService%("Workspace"%)', "workspace", 1) end
-			if str:sub(1, 27 + #plr.Name) == 'game:GetService("Players").' .. plr.Name then str = str:gsub('game:GetService%("Players"%).' .. plr.Name, 'game:GetService("Players").LocalPlayer', 1) end
-			return str
-		end
-
 		context:Register("COPY_PATH", {
 			Name = "Copy Path",
 			OnClick = function()
 				local sList = selection.List
 				if #sList == 1 then
-					env.setclipboard(clth(Explorer.GetInstancePath(sList[1].Obj)))
+					env.setclipboard(shortenPath(Explorer.GetInstancePath(sList[1].Obj)))
 				elseif #sList > 1 then
 					local resList = { "{" }
 					local count = 2
 					for i = 1, #sList do
-						local path = "\t" .. clth(Explorer.GetInstancePath(sList[i].Obj)) .. ","
+						local path = "\t" .. shortenPath(Explorer.GetInstancePath(sList[i].Obj)) .. ","
 						if #path > 0 then
 							resList[count] = path
 							count = count + 1
@@ -2859,9 +3744,12 @@ local function main()
 		context:Register("COPY_NODE", {
 			Name = "Copy Node Info",
 			OnClick = function()
-				local sList = selection.List
-				local node = sList[1]
-				--env.setclipboard(serialize_table(node))
+				local lines = {}
+				for _, node in selection.List do
+					local obj = node.Obj
+					table.insert(lines, string.format("%s (%s) | %d children | %s", obj.Name, obj.ClassName, #node, shortenPath(Explorer.GetInstancePath(obj))))
+				end
+				env.setclipboard(table.concat(lines, "\n"))
 			end,
 		})
 
@@ -2887,7 +3775,16 @@ local function main()
 			end,
 		})
 
-		context:Register("GET_REFERENCES", { Name = "Get Lua References", IconMap = Explorer.ClassIcons, Icon = 34, OnClick = function() end })
+		context:Register("GET_REFERENCES", {
+			Name = "Get Lua References",
+			IconMap = Explorer.ClassIcons,
+			Icon = 34,
+			OnClick = function()
+				local node = selection.List[1]
+				if not node then return end
+				ScriptViewer.ShowText("Lua References", Explorer.FindReferences(node.Obj))
+			end,
+		})
 
 		context:Register("SAVE_INST", {
 			Name = "Save to File",
@@ -2915,7 +3812,21 @@ local function main()
 			end,
 		})
 
-		context:Register("VIEW_API", { Name = "View API Page", IconMap = Explorer.MiscIcons, Icon = "Reference", OnClick = function() end })
+		context:Register("VIEW_API", {
+			Name = "Copy API Page Link",
+			IconMap = Explorer.MiscIcons,
+			Icon = "Reference",
+			OnClick = function()
+				local node = selection.List[1]
+				if not node then return end
+				local url = "https://create.roblox.com/docs/reference/engine/classes/" .. node.Obj.ClassName
+				if env.setclipboard then
+					env.setclipboard(url)
+				else
+					print(url)
+				end
+			end,
+		})
 
 		context:Register("VIEW_OBJECT", {
 			Name = "View Object (Right click to reset)",
@@ -3042,7 +3953,7 @@ local function main()
 
 				local node = sList[1]
 				if isa(node.Obj, "Model") then
-					for _, v in ipairs(cloneref(game:GetService("Players")):GetPlayers()) do
+					for _, v in ipairs(service.Players:GetPlayers()) do
 						if v.Character == node.Obj then
 							selection:Set(nodes[v])
 							Explorer.ViewNode(nodes[v])
@@ -3212,309 +4123,247 @@ local function main()
 		return path
 	end
 
+	-- The API class of className followed by all its superclasses
+	local function getClassChain(className)
+		local chain = {}
+		local apiClass = API.Classes[className]
+		while apiClass do
+			table.insert(chain, apiClass)
+			apiClass = apiClass.Superclass
+		end
+		return chain
+	end
+
+	local function findMember(className, kind, name)
+		for _, apiClass in getClassChain(className) do
+			for _, member in apiClass[kind] do
+				if member.Name == name then return member end
+			end
+		end
+		return nil
+	end
+
+	local function parameterNames(member)
+		local names = {}
+		for _, parameter in member and member.Parameters or {} do
+			table.insert(names, parameter.Name)
+		end
+		return table.concat(names, ", ")
+	end
+
+	local function createMemberContext()
+		local context = Lib.ContextMenu.new()
+		context.SearchEnabled = true
+		context.MaxHeight = 400
+		context:ApplyTheme({
+			ContentColor = Settings.Theme.Main2,
+			OutlineColor = Settings.Theme.Outline1,
+			DividerColor = Settings.Theme.Outline1,
+			TextColor = Settings.Theme.Text,
+			HighlightColor = Settings.Theme.ButtonHover,
+		})
+		return context
+	end
+
+	-- Adds every member of the selected classes, grouped under the class that declares it
+	local function addClassMembers(context, nodesList, kind, showDeprecated, makeItem)
+		local seenClasses, added = {}, {}
+		for _, node in nodesList do
+			local className = node.Obj.ClassName
+			if seenClasses[className] then continue end
+			seenClasses[className] = true
+
+			for _, apiClass in getClassChain(className) do
+				local rmdEntry = RMD.Classes[apiClass.Name]
+				local icon = rmdEntry and tonumber(rmdEntry.ExplorerImageIndex) or 0
+				local hasDivider = false
+
+				for _, member in apiClass[kind] do
+					if added[member.Name] or (member.Tags.Deprecated and not showDeprecated) then continue end
+					added[member.Name] = true
+
+					if not hasDivider then
+						context:AddDivider(apiClass.Name)
+						hasDivider = true
+					end
+
+					local item = makeItem(member)
+					item.IconMap = Explorer.ClassIcons
+					item.Icon = icon
+					context:Add(item)
+				end
+			end
+		end
+	end
+
 	Explorer.InitViewFunctions = function(x, y)
 		local context = Explorer.ViewFunctionsContext
 		if not context then
-			context = Lib.ContextMenu.new()
-			context.SearchEnabled = true
-			context.MaxHeight = 400
-			context:ApplyTheme({
-				ContentColor = Settings.Theme.Main2,
-				OutlineColor = Settings.Theme.Outline1,
-				DividerColor = Settings.Theme.Outline1,
-				TextColor = Settings.Theme.Text,
-				HighlightColor = Settings.Theme.ButtonHover,
-			})
+			context = createMemberContext()
 			Explorer.ViewFunctionsContext = context
 		end
 
-		local Classes = {}
-		local sList = selection.List
-		for i = 1, #sList do
-			local node = sList[i]
-			local obj = node.Obj
-			local class = obj.ClassName
-			if not Classes[class] then Classes[class] = {} end
-			table.insert(Classes[class], obj)
-		end
+		local selectedNodes = table.clone(selection.List)
 
-		local clth = function(str)
-			if str:sub(1, 28) == 'game:GetService("Workspace")' then str = str:gsub('game:GetService%("Workspace"%)', "workspace", 1) end
-			if str:sub(1, 27 + #plr.Name) == 'game:GetService("Players").' .. plr.Name then str = str:gsub('game:GetService%("Players"%).' .. plr.Name, 'game:GetService("Players").LocalPlayer', 1) end
-			return str
-		end
-
-		local function onClick(fName)
-			local m = ""
-			for i = 1, #sList do
-				local node = sList[i]
+		local function copyCalls(functionName)
+			local lines = {}
+			for _, node in selectedNodes do
 				local obj = node.Obj
-				local class = obj.ClassName
-				local path = clth(Explorer.GetInstancePath(obj))
-				local args, retrs = (function()
-					local apiClass = API.Classes[class]
-					local apiSuperclass = apiClass.Superclass
-					local y, z
-
-					for _, d in next, { apiClass or {}, apiSuperclass or {}, API.Classes["Instance"] } do
-						for _, v in next, d.Functions do
-							if y and z then return y, z end
-							if v.Name == fName then y = (function()
-								local t = {}
-								for _, v2 in next, v.Parameters do
-									table.insert(t, v2.Name)
-								end
-								return table.concat(t, ", ")
-							end)() end
-							if v.Name == fName and #v.ReturnType > 0 then z = v.ReturnType end
-						end
-					end
-
-					return y, z
-				end)()
-				m = m .. string.format("%s:%s(%s) --[[ Return: %s ]]\n", path, fName, args or "", retrs or "")
+				local member = findMember(obj.ClassName, "Functions", functionName)
+				local path = shortenPath(Explorer.GetInstancePath(obj))
+				table.insert(lines, string.format("%s:%s(%s) --[[ Return: %s ]]", path, functionName, parameterNames(member), member and member.ReturnType or ""))
 			end
-
-			env.setclipboard(m)
+			env.setclipboard(table.concat(lines, "\n") .. "\n")
 		end
 
 		context:Clear()
-		local lastCategory = ""
-		local alreadyAdded = {}
-		for class, objList in next, Classes do
-			local apiClass = API.Classes[class]
-			local rmdEntry = RMD.Classes[class]
-			local iconInd = rmdEntry and tonumber(rmdEntry.ExplorerImageIndex) or 0
+		addClassMembers(context, selectedNodes, "Functions", Settings.Properties.ShowDeprecatedFunctions, function(member)
+			return {
+				Name = member.Name,
+				OnClick = function() copyCalls(member.Name) end,
+			}
+		end)
+		context:Show(x, y)
+	end
 
-			if lastCategory ~= class and apiClass and #apiClass.Functions > 0 then
-				context:AddDivider(class)
-				lastCategory = class
-			end
+	-- Scripts with Lua handlers connected to signal, or nil when getconnections is missing
+	local function getConnectedScripts(signal)
+		if not getconnections then return nil end
 
-			if apiClass and #apiClass.Functions > 0 then
-				for _, v in next, apiClass.Functions do
-					if not Settings.Properties.ShowDeprecatedFunctions and (v.Tags and v.Tags.Deprecated) then continue end
-					if table.find(alreadyAdded, v.Name) then continue end
-					table.insert(alreadyAdded, v.Name)
-					context:Add({
-						Name = v.Name,
-						IconMap = Explorer.ClassIcons,
-						Icon = iconInd,
-						OnClick = onClick,
-					})
-				end
-			end
+		local success, connections = pcall(getconnections, signal)
+		if not success then return {} end
 
-			if apiClass and apiClass.Superclass and #apiClass.Superclass.Functions > 0 then
-				context:AddDivider(apiClass.Superclass.Name)
-				for _, v in next, apiClass.Superclass.Functions do
-					if not Settings.Properties.ShowDeprecatedFunctions and (v.Tags and v.Tags.Deprecated) then continue end
-					if table.find(alreadyAdded, v.Name) then continue end
-					table.insert(alreadyAdded, v.Name)
-					context:Add({
-						Name = v.Name,
-						IconMap = Explorer.ClassIcons,
-						Icon = 0,
-						OnClick = onClick,
-					})
-				end
-			end
-
-			context:AddDivider("Instance")
-			for _, v in next, API.Classes["Instance"].Functions do
-				if not Settings.Properties.ShowDeprecatedFunctions and (v.Tags and v.Tags.Deprecated) then continue end
-				if table.find(alreadyAdded, v.Name) then continue end
-				table.insert(alreadyAdded, v.Name)
-				context:Add({
-					Name = v.Name,
-					IconMap = Explorer.ClassIcons,
-					Icon = 0,
-					OnClick = onClick,
-				})
+		local scripts = {}
+		for _, connection in connections do
+			local func = connection.Function
+			if type(func) == "function" and (not islclosure or islclosure(func)) then
+				local hasEnv, fenv = pcall(getfenv, func)
+				local scr = hasEnv and rawget(fenv, "script")
+				table.insert(scripts, typeof(scr) == "Instance" and scr or false)
 			end
 		end
-
-		context:Show(x, y)
+		return scripts
 	end
 
 	Explorer.InitViewConnections = function(x, y)
 		local context = Explorer.ViewConnectionsContext
 		if not context then
-			context = Lib.ContextMenu.new()
-			context.SearchEnabled = true
-			context.MaxHeight = 400
-			context:ApplyTheme({
-				ContentColor = Settings.Theme.Main2,
-				OutlineColor = Settings.Theme.Outline1,
-				DividerColor = Settings.Theme.Outline1,
-				TextColor = Settings.Theme.Text,
-				HighlightColor = Settings.Theme.ButtonHover,
-			})
+			context = createMemberContext()
 			Explorer.ViewConnectionsContext = context
 		end
 
-		local UpdateEvents
-		local Classes = {}
-		local Checked = {}
-		local sList = selection.List
-		for i = 1, #sList do
-			local node = sList[i]
-			local obj = node.Obj
-			local class = obj.ClassName
-			if not Classes[class] then Classes[class] = {} end
-			table.insert(Classes[class], obj)
+		local selectedNodes = table.clone(selection.List)
+		-- true: has Lua handlers, false: checked and has none
+		local checked = {}
+		local updateEvents
+
+		local function getSignal(obj, eventName)
+			local success, signal = pcall(function() return obj[eventName] end)
+			return success and signal or nil
 		end
 
-		local clth = function(str)
-			if str:sub(1, 28) == 'game:GetService("Workspace")' then str = str:gsub('game:GetService%("Workspace"%)', "workspace", 1) end
-			if str:sub(1, 27 + #plr.Name) == 'game:GetService("Players").' .. plr.Name then str = str:gsub('game:GetService%("Players"%).' .. plr.Name, 'game:GetService("Players").LocalPlayer', 1) end
-			return str
-		end
-
-		local function onRightClick(Event)
-			Event = Event:gsub(" 🟢", ""):gsub(" 🔴", "")
-			local m = ""
-			local m2 = ""
-			local paths = {}
-			for i = 1, #sList do
-				local node = sList[i]
-				local obj = node.Obj
-				local class = obj.ClassName
-				paths[obj] = clth(Explorer.GetInstancePath(obj))
-				m = m .. string.format("-- Connection: %s.%s\n", paths[obj], Event)
-				local te = "--[[\n	Scripts:\n"
-				local foundT = false
-				for _, v in getconnections(obj[Event]) do
-					local s = v.Function and getfenv(v.Function)
-					if s then
-						foundT = true
-						te = te .. "	" .. clth(Explorer.GetInstancePath(s.script)) .. "\n"
-					end
+		local function checkEvent(eventName)
+			checked[eventName] = false
+			for _, node in selectedNodes do
+				local signal = getSignal(node.Obj, eventName)
+				local scripts = signal and getConnectedScripts(signal)
+				if scripts and #scripts > 0 then
+					checked[eventName] = true
+					break
 				end
-				te = te .. "--]]\n"
-				if foundT then m = m .. te end
-
-				local args = (function()
-					local apiClass = API.Classes[class]
-					local apiSuperclass = apiClass.Superclass
-
-					for _, d in next, { apiClass or {}, apiSuperclass or {}, API.Classes["Instance"] } do
-						for _, v in next, d.Events do
-							if v.Name == Event and #v.Parameters > 0 then return (function()
-								local t = {}
-								for _, v2 in next, v.Parameters do
-									table.insert(t, v2.Name)
-								end
-								return table.concat(t, ", ")
-							end)() end
-						end
-					end
-
-					return ""
-				end)()
-
-				m2 = m2 .. string.format("%s.%s:Connect(function(%s)\n\nend)\n", paths[obj], Event, args)
 			end
-
-			env.setclipboard(m .. m2)
+			updateEvents()
 		end
 
-		local function onClick(Event)
-			if not Event then return end
-			Event = Event:gsub(" 🟢", ""):gsub(" 🔴", "")
-			Checked[Event] = false
-			for i = 1, #sList do
-				local node = sList[i]
+		local function copyConnections(eventName)
+			local comments, templates = {}, {}
+			for _, node in selectedNodes do
 				local obj = node.Obj
-				for _, v in getconnections(obj[Event]) do
-					local s = v.Function and getfenv(v.Function)
-					if s then
-						Checked[Event] = true
-						break
+				local path = shortenPath(Explorer.GetInstancePath(obj))
+				table.insert(comments, `-- Connection: {path}.{eventName}`)
+
+				local signal = getSignal(obj, eventName)
+				local scripts = signal and getConnectedScripts(signal)
+				if scripts and #scripts > 0 then
+					table.insert(comments, "--[[\n\tScripts:")
+					for _, scr in scripts do
+						table.insert(comments, "\t" .. (scr and shortenPath(Explorer.GetInstancePath(scr)) or "<no script>"))
 					end
+					table.insert(comments, "--]]")
 				end
-				if Checked[Event] then
-					UpdateEvents()
-					return
-				end
-				Checked[Event] = false
+
+				local member = findMember(obj.ClassName, "Events", eventName)
+				table.insert(templates, string.format("%s.%s:Connect(function(%s)\n\nend)", path, eventName, parameterNames(member)))
 			end
-			UpdateEvents()
+			env.setclipboard(table.concat(comments, "\n") .. "\n" .. table.concat(templates, "\n") .. "\n")
 		end
 
-		UpdateEvents = function()
+		updateEvents = function()
 			context:Clear()
-
-			local lastCategory = ""
-			local alreadyAdded = {}
-			for class, objList in next, Classes do
-				local apiClass = API.Classes[class]
-				local rmdEntry = RMD.Classes[class]
-				local iconInd = rmdEntry and tonumber(rmdEntry.ExplorerImageIndex) or 0
-				local category = rmdEntry and rmdEntry.ClassCategory or "Uncategorized"
-
-				if lastCategory ~= class and apiClass and #apiClass.Events > 0 then
-					context:AddDivider(class)
-					lastCategory = class
-				end
-
-				if apiClass and #apiClass.Events > 0 then
-					for _, v in next, apiClass.Events do
-						if not Settings.Properties.ShowDeprecatedEvents and (v.Tags and v.Tags.Deprecated) then continue end
-						if table.find(alreadyAdded, v.Name) then continue end
-						table.insert(alreadyAdded, v.Name)
-						local name = (Checked[v.Name] ~= nil and Checked[v.Name] and (v.Name .. " 🟢")) or (Checked[v.Name] ~= nil and not Checked[v.Name] and (v.Name .. " 🔴")) or v.Name
-						context:Add({
-							Name = name,
-							IconMap = Explorer.ClassIcons,
-							Icon = iconInd,
-							OnClick = onClick,
-							OnRightClick = onRightClick,
-							NoHide = true,
-						})
-					end
-				end
-
-				if apiClass and apiClass.Superclass and #apiClass.Superclass.Events > 0 then
-					context:AddDivider(apiClass.Superclass.Name)
-					for _, v in next, apiClass.Superclass.Events do
-						if not Settings.Properties.ShowDeprecatedEvents and (v.Tags and v.Tags.Deprecated) then continue end
-						if table.find(alreadyAdded, v.Name) then continue end
-						table.insert(alreadyAdded, v.Name)
-						local name = (Checked[v.Name] ~= nil and Checked[v.Name] and (v.Name .. " 🟢")) or (Checked[v.Name] ~= nil and not Checked[v.Name] and (v.Name .. " 🔴")) or v.Name
-						context:Add({
-							Name = name,
-							IconMap = Explorer.ClassIcons,
-							Icon = 0,
-							OnClick = onClick,
-							OnRightClick = onRightClick,
-							NoHide = true,
-						})
-					end
-				end
-
-				context:AddDivider("Instance")
-				for _, v in next, API.Classes["Instance"].Events do
-					if not Settings.Properties.ShowDeprecatedEvents and (v.Tags and v.Tags.Deprecated) then continue end
-					if table.find(alreadyAdded, v.Name) then continue end
-					table.insert(alreadyAdded, v.Name)
-					local name = (Checked[v.Name] ~= nil and Checked[v.Name] and (v.Name .. " 🟢")) or (Checked[v.Name] ~= nil and not Checked[v.Name] and (v.Name .. " 🔴")) or v.Name
-					context:Add({
-						Name = name,
-						IconMap = Explorer.ClassIcons,
-						Icon = 0,
-						OnClick = onClick,
-						OnRightClick = onRightClick,
-						NoHide = true,
-					})
-				end
-			end
-
+			addClassMembers(context, selectedNodes, "Events", Settings.Properties.ShowDeprecatedEvents, function(member)
+				local status = checked[member.Name]
+				return {
+					Name = member.Name .. (status == true and " 🟢" or status == false and " 🔴" or ""),
+					OnClick = function() checkEvent(member.Name) end,
+					OnRightClick = function() copyConnections(member.Name) end,
+					NoHide = true,
+				}
+			end)
 			context:Refresh()
 		end
 
-		UpdateEvents()
+		updateEvents()
 		context:Show(x, y)
+	end
+
+	local MAX_REFERENCES = 500
+
+	-- Lists the tables and function upvalues that hold a reference to target
+	Explorer.FindReferences = function(target)		
+local getgc = getgc or get_gc_objects
+		if not getgc then return "-- Get Lua References needs getgc" end
+		local getupvalues = (debug and debug.getupvalues) or getupvalues
+
+		local lines = { `-- Lua references to {shortenPath(Explorer.GetInstancePath(target))}`, "" }
+		local count = 0
+
+		local function add(line)
+			count += 1
+			table.insert(lines, line)
+		end
+
+		local objects = getgc(true)
+		for index, value in objects do
+			if count >= MAX_REFERENCES then break end
+			if index % 20000 == 0 then task.wait() end
+
+			local valueType = type(value)
+			if valueType == "table" then
+				-- Raw iteration: a __iter or __index metamethod must not run game code
+				for key, item in next, value do
+					if item == target then
+						add(`[table] key {tostring(key)} = <instance>`)
+					elseif key == target then
+						add(`[table] key <instance> = {typeof(item)}`)
+					end
+				end
+			elseif valueType == "function" and getupvalues and (not islclosure or islclosure(value)) then
+				local success, upvalues = pcall(getupvalues, value)
+				if success then
+					for upvalueIndex, upvalue in upvalues do
+						if upvalue == target then
+							local source, line, name = debug.info(value, "sln")
+							add(`[upvalue {upvalueIndex}] function {name ~= "" and name or "<anonymous>"} at {source}:{line}`)
+							break
+						end
+					end
+				end
+			end
+		end
+
+		if count == 0 then table.insert(lines, "-- No references found") end
+		if count >= MAX_REFERENCES then table.insert(lines, `-- Stopped after {MAX_REFERENCES} references`) end
+		return table.concat(lines, "\n")
 	end
 
 	Explorer.InitInsertObject = function()
@@ -3573,363 +4422,62 @@ local function main()
 		Explorer.InsertObjectContext = context
 	end
 
-	--[[
-		Headers, Setups, Predicate, ObjectDefs
-	]]
-	Explorer.SearchFilters = { -- TODO: Use data table (so we can disable some if funcs don't exist)
-		Comparison = {
-			["isa"] = function(argString)
-				local lower = string.lower
-				local find = string.find
-				local classQuery = string.split(argString)[1]
-				if not classQuery then return end
-				classQuery = lower(classQuery)
+	local SUGGESTION_ROW_HEIGHT = 20
+	local MAX_VISIBLE_SUGGESTIONS = 8
+	local LIVE_SEARCH_DELAY = 0.35
 
-				local className
-				for class, _ in pairs(API.Classes) do
-					local cName = lower(class)
-					if cName == classQuery then
-						className = class
-						break
-					elseif find(cName, classQuery, 1, true) then
-						className = class
-					end
-				end
-				if not className then return end
+	local function setSearchStatus(text) Explorer.Window:SetTitle(text and `Explorer - {text}` or "Explorer") end
 
-				return {
-					Headers = { "local isa = game.IsA" },
-					Predicate = "isa(obj,'" .. className .. "')",
-				}
-			end,
-			["remotes"] = function(argString)
-				return {
-					Headers = { "local isa = game.IsA" },
-					Predicate = "isa(obj,'RemoteEvent') or isa(obj,'RemoteFunction')",
-				}
-			end,
-			["bindables"] = function(argString)
-				return {
-					Headers = { "local isa = game.IsA" },
-					Predicate = "isa(obj,'BindableEvent') or isa(obj,'BindableFunction')",
-				}
-			end,
-			["rad"] = function(argString)
-				local num = tonumber(argString)
-				if not num then return end
-
-				if not service.Players.LocalPlayer.Character or not service.Players.LocalPlayer.Character:FindFirstChild("HumanoidRootPart") or not service.Players.LocalPlayer.Character.HumanoidRootPart:IsA("BasePart") then return end
-
-				return {
-					Headers = { "local isa = game.IsA", "local hrp = service.Players.LocalPlayer.Character.HumanoidRootPart" },
-					Setups = { "local hrpPos = hrp.Position" },
-					ObjectDefs = { "local isBasePart = isa(obj,'BasePart')" },
-					Predicate = "(isBasePart and (obj.Position-hrpPos).Magnitude <= " .. num .. ")",
-				}
-			end,
-		},
-		Specific = {
-			["players"] = function()
-				return function() return service.Players:GetPlayers() end
-			end,
-			["loadedmodules"] = function() return env.getloadedmodules end,
-		},
-		Default = function(argString, caseSensitive)
-			local cleanString = argString:gsub('"', '\\"'):gsub("\n", "\\n")
-			if caseSensitive then
-				return {
-					Headers = { "local find = string.find" },
-					ObjectDefs = { "local objName = tostring(obj)" },
-					Predicate = 'find(objName,"' .. cleanString .. '",1,true)',
-				}
-			else
-				return {
-					Headers = { "local lower = string.lower", "local find = string.find", "local tostring = tostring" },
-					ObjectDefs = { "local lowerName = lower(tostring(obj))" },
-					Predicate = 'find(lowerName,"' .. cleanString:lower() .. '",1,true)',
-				}
-			end
-		end,
-		SpecificDefault = function(n)
-			return {
-				Headers = {},
-				ObjectDefs = { "local isSpec" .. n .. " = specResults[" .. n .. "][node]" },
-				Predicate = "isSpec" .. n,
-			}
-		end,
-	}
-
-	Explorer.BuildSearchFunc = function(query)
-		local specFilterList, specMap = {}, {}
-		local finalPredicate = ""
-		local rep = string.rep
-		local formatQuery = query:gsub("\\.", "  "):gsub('".-"', function(str) return rep(" ", #str) end)
-		local headers = {}
-		local objectDefs = {}
-		local setups = {}
-		local find = string.find
-		local sub = string.sub
-		local lower = string.lower
-		local match = string.match
-		local ops = {
-			["("] = "(",
-			[")"] = ")",
-			["||"] = " or ",
-			["&&"] = " and ",
-		}
-		local filterCount = 0
-		local compFilters = Explorer.SearchFilters.Comparison
-		local specFilters = Explorer.SearchFilters.Specific
-		local init = 1
-		local lastOp = nil
-
-		local function processFilter(dat)
-			if dat.Headers then
-				local t = dat.Headers
-				for i = 1, #t do
-					headers[t[i] ] = true
-				end
-			end
-
-			if dat.ObjectDefs then
-				local t = dat.ObjectDefs
-				for i = 1, #t do
-					objectDefs[t[i] ] = true
-				end
-			end
-
-			if dat.Setups then
-				local t = dat.Setups
-				for i = 1, #t do
-					setups[t[i] ] = true
-				end
-			end
-
-			finalPredicate = finalPredicate .. dat.Predicate
+	-- Runs a search. A live search keeps the previous results when the query is incomplete.
+	Explorer.DoSearch = function(query, isLive)
+		local predicate, err = SearchQuery.compile(query)
+		if #query > 0 and not predicate then
+			if not isLive then setSearchStatus(err) end
+			return
 		end
 
-		local found = {}
-		local foundData = {}
-		local find = string.find
-		local sub = string.sub
-
-		local function findAll(str, pattern)
-			local count = #found + 1
-			local init = 1
-			local sz = #pattern
-			local x, y, extra = find(str, pattern, init, true)
-			while x do
-				found[count] = x
-				foundData[x] = { sz, pattern }
-
-				count = count + 1
-				init = y + 1
-				x, y, extra = find(str, pattern, init, true)
-			end
-		end
-		local start = tick()
-		findAll(formatQuery, "&&")
-		findAll(formatQuery, "||")
-		findAll(formatQuery, "(")
-		findAll(formatQuery, ")")
-		table.sort(found)
-		table.insert(found, #formatQuery + 1)
-
-		local function inQuotes(str)
-			local len = #str
-			if sub(str, 1, 1) == '"' and sub(str, len, len) == '"' then return sub(str, 2, len - 1) end
-		end
-
-		for i = 1, #found do
-			local nextInd = found[i]
-			local nextData = foundData[nextInd] or { 1 }
-			local op = ops[nextData[2] ]
-			local term = sub(query, init, nextInd - 1)
-			term = match(term, "^%s*(.-)%s*$") or "" -- Trim
-
-			if #term > 0 then
-				if sub(term, 1, 1) == "!" then
-					term = sub(term, 2)
-					finalPredicate = finalPredicate .. "not "
-				end
-
-				local qTerm = inQuotes(term)
-				if qTerm then
-					processFilter(Explorer.SearchFilters.Default(qTerm, true))
-				else
-					local x, y = find(term, "%S+")
-					if x then
-						local first = sub(term, x, y)
-						local specifier = sub(first, 1, 1) == "/" and lower(sub(first, 2))
-						local compFunc = specifier and compFilters[specifier]
-						local specFunc = specifier and specFilters[specifier]
-
-						if compFunc then
-							local argStr = sub(term, y + 2)
-							local ret = compFunc(inQuotes(argStr) or argStr)
-							if ret then
-								processFilter(ret)
-							else
-								finalPredicate = finalPredicate .. "false"
-							end
-						elseif specFunc then
-							local argStr = sub(term, y + 2)
-							local ret = specFunc(inQuotes(argStr) or argStr)
-							if ret then
-								if not specMap[term] then
-									specFilterList[#specFilterList + 1] = ret
-									specMap[term] = #specFilterList
-								end
-								processFilter(Explorer.SearchFilters.SpecificDefault(specMap[term]))
-							else
-								finalPredicate = finalPredicate .. "false"
-							end
-						else
-							processFilter(Explorer.SearchFilters.Default(term))
-						end
-					end
-				end
-			end
-
-			if op then
-				finalPredicate = finalPredicate .. op
-				if op == "(" and (#term > 0 or lastOp == ")") then -- Handle bracket glitch
-					return
-				else
-					lastOp = op
-				end
-			end
-			init = nextInd + nextData[1]
-		end
-
-		local finalSetups = ""
-		local finalHeaders = ""
-		local finalObjectDefs = ""
-
-		for setup, _ in next, setups do
-			finalSetups = finalSetups .. setup .. "\n"
-		end
-		for header, _ in next, headers do
-			finalHeaders = finalHeaders .. header .. "\n"
-		end
-		for oDef, _ in next, objectDefs do
-			finalObjectDefs = finalObjectDefs .. oDef .. "\n"
-		end
-
-		local template = [==[
-local searchResults = searchResults
-local nodes = nodes
-local expandTable = Explorer.SearchExpanded
-local specResults = specResults
-local service = service
-
-%s
-local function search(root)
-%s
-
-	local expandedpar = false
-	for i = 1,#root do
-		local node = root[i]
-		local obj = node.Obj
-
-%s
-
-		if %s then
-			expandTable[node] = 0
-			searchResults[node] = true
-			if not expandedpar then
-				local parnode = node.Parent
-				while parnode and (not searchResults[parnode] or expandTable[parnode] == 0) do
-					expandTable[parnode] = true
-					searchResults[parnode] = true
-					parnode = parnode.Parent
-				end
-				expandedpar = true
-			end
-		end
-
-		if #node > 0 then search(node) end
-	end
-end
-return search]==]
-
-		local funcStr = template:format(finalHeaders, finalSetups, finalObjectDefs, finalPredicate)
-		local s, func = pcall(loadstring, funcStr)
-		if not s or not func then return nil, specFilterList end
-
-		local env = setmetatable({ ["searchResults"] = searchResults, ["nodes"] = nodes, ["Explorer"] = Explorer, ["specResults"] = specResults, ["service"] = service }, { __index = getfenv() })
-		setfenv(func, env)
-
-		return func(), specFilterList
-	end
-
-	Explorer.DoSearch = function(query)
 		table.clear(Explorer.SearchExpanded)
 		table.clear(searchResults)
-		expanded = (#query == 0 and Explorer.Expanded or Explorer.SearchExpanded)
+		expanded = predicate and Explorer.SearchExpanded or Explorer.Expanded
 		searchFunc = nil
+		Explorer.SearchMatchCount = 0
 
-		if #query > 0 then
+		if predicate then
 			local expandTable = Explorer.SearchExpanded
-			local specFilters
 
-			local lower = string.lower
-			local find = string.find
-			local tostring = tostring
-
-			local lowerQuery = lower(query)
-
-			local function defaultSearch(root)
-				local expandedpar = false
+			local function search(root)
+				local expandedParent = false
 				for i = 1, #root do
 					local node = root[i]
 					local obj = node.Obj
 
-					if find(lower(tostring(obj)), lowerQuery, 1, true) then
+					if not node.Del and predicate(obj) then
+						Explorer.SearchMatchCount += 1
 						expandTable[node] = 0
 						searchResults[node] = true
-						if not expandedpar then
-							local parnode = node.Parent
-							while parnode and (not searchResults[parnode] or expandTable[parnode] == 0) do
-								expanded[parnode] = true
-								searchResults[parnode] = true
-								parnode = parnode.Parent
+						if not expandedParent then
+							local parentNode = node.Parent
+							while parentNode and (not searchResults[parentNode] or expandTable[parentNode] == 0) do
+								expandTable[parentNode] = true
+								searchResults[parentNode] = true
+								parentNode = parentNode.Parent
 							end
-							expandedpar = true
+							expandedParent = true
 						end
 					end
 
-					if #node > 0 then defaultSearch(node) end
+					if #node > 0 then search(node) end
 				end
 			end
 
-			if Main.Elevated then
-				local start = tick()
-				searchFunc, specFilters = Explorer.BuildSearchFunc(query)
-				--print("BUILD SEARCH",tick()-start)
-			else
-				searchFunc = defaultSearch
-			end
+			searchFunc = search
+			search(nodes[game])
+			search(nilNode)
 
-			if specFilters then
-				table.clear(specResults)
-				for i = 1, #specFilters do -- Specific search filers that returns list of matches
-					local resMap = {}
-					specResults[i] = resMap
-					local objs = specFilters[i]()
-					for c = 1, #objs do
-						local node = nodes[objs[c] ]
-						if node then resMap[node] = true end
-					end
-				end
-			end
-
-			if searchFunc then
-				local start = tick()
-				searchFunc(nodes[game])
-				searchFunc(nilNode)
-				--warn(tick()-start)
-			end
+			local count = Explorer.SearchMatchCount
+			setSearchStatus(count == 1 and "1 match" or `{count} matches`)
+		else
+			setSearchStatus(nil)
 		end
 
 		Explorer.ForceUpdate()
@@ -3937,17 +4485,239 @@ return search]==]
 
 	Explorer.ClearSearch = function()
 		Explorer.GuiElems.SearchBar.Text = ""
-		expanded = Explorer.Expanded
-		searchFunc = nil
+		Explorer.DoSearch("")
+	end
+
+	-- Nodes that matched the search, without the ancestors expanded to show them
+	Explorer.GetSearchMatches = function()
+		local matches = {}
+		for node in searchResults do
+			if Explorer.SearchExpanded[node] == 0 then table.insert(matches, node) end
+		end
+		return matches
+	end
+
+	Explorer.InitSearchSuggestions = function(searchBox)
+		local content = Explorer.Window.GuiElems.Content
+		local suggestions = {}
+		local rows = {}
+		local highlighted = 0
+		local keyConnection
+
+		local frame = Instance.new("Frame")
+		frame.Name = "SearchSuggestions"
+		frame.BackgroundColor3 = Settings.Theme.Menu
+		frame.BorderColor3 = Settings.Theme.Outline1
+		frame.Position = UDim2.new(0, 3, 0, 20)
+		frame.Visible = false
+		frame.ZIndex = 10
+		frame.Parent = content
+
+		local header = Instance.new("TextLabel")
+		header.BackgroundTransparency = 1
+		header.Font = Enum.Font.SourceSansBold
+		header.TextSize = 14
+		header.TextColor3 = Settings.Theme.PlaceholderText
+		header.TextXAlignment = Enum.TextXAlignment.Left
+		header.Position = UDim2.new(0, 6, 0, 0)
+		header.Size = UDim2.new(1, -12, 0, 18)
+		header.ZIndex = 11
+		header.Parent = frame
+
+		local list = Instance.new("ScrollingFrame")
+		list.BackgroundTransparency = 1
+		list.BorderSizePixel = 0
+		list.ScrollBarThickness = 4
+		list.ScrollBarImageColor3 = Settings.Theme.Highlight
+		list.ZIndex = 11
+		list.Parent = frame
+
+		local layout = Instance.new("UIListLayout")
+		layout.SortOrder = Enum.SortOrder.LayoutOrder
+		layout.Parent = list
+
+		local function paint()
+			for index, row in rows do
+				row.BackgroundTransparency = index == highlighted and 0 or 1
+			end
+		end
+
+		local function hide()
+			frame.Visible = false
+			highlighted = 0
+		end
+
+		local function accept(index)
+			local suggestion = suggestions[index]
+			if not suggestion then return end
+
+			searchBox.Text = suggestion.Text
+			searchBox:CaptureFocus()
+			searchBox.CursorPosition = #suggestion.Text + 1
+		end
+
+		local function getRow(index)			
+local row = rows[index]
+			if row then return row end
+
+			row = Instance.new("TextButton")
+			row.AutoButtonColor = false
+			row.Text = ""
+			row.BorderSizePixel = 0
+			row.BackgroundColor3 = Settings.Theme.ListSelection
+			row.BackgroundTransparency = 1
+			row.Size = UDim2.new(1, 0, 0, SUGGESTION_ROW_HEIGHT)
+			row.LayoutOrder = index
+			row.ZIndex = 12
+
+			local icon = Explorer.ClassIcons:GetLabel()
+			icon.Name = "Icon"
+			icon.Position = UDim2.new(0, 4, 0, 2)
+			icon.ZIndex = 13
+			icon.Parent = row
+
+			local label = Instance.new("TextLabel")
+			label.Name = "Label"
+			label.BackgroundTransparency = 1
+			label.Font = Enum.Font.SourceSans
+			label.TextSize = 14
+			label.TextColor3 = Settings.Theme.Text
+			label.TextXAlignment = Enum.TextXAlignment.Left
+			label.TextTruncate = Enum.TextTruncate.AtEnd
+			label.ZIndex = 13
+			label.Parent = row
+
+			row.MouseButton1Down:Connect(function() accept(index) end)
+			row.MouseEnter:Connect(function()
+				highlighted = index
+				paint()
+			end)
+
+			row.Parent = list
+			rows[index] = row
+			return row
+		end
+
+		local function scrollToHighlighted()
+			local top = (highlighted - 1) * SUGGESTION_ROW_HEIGHT
+			local viewHeight = list.AbsoluteSize.Y
+			if top < list.CanvasPosition.Y then
+				list.CanvasPosition = Vector2.new(0, top)
+			elseif top + SUGGESTION_ROW_HEIGHT > list.CanvasPosition.Y + viewHeight then
+				list.CanvasPosition = Vector2.new(0, top + SUGGESTION_ROW_HEIGHT - viewHeight)
+			end
+		end
+
+		local function refresh()
+			if not searchBox:IsFocused() then return hide() end
+
+			local headerText
+			suggestions, headerText = Suggest.get(searchBox.Text)
+			highlighted = 0
+			if #suggestions == 0 then return hide() end
+
+			for index, suggestion in suggestions do
+				local row = getRow(index)
+				local hasIcon = suggestion.ClassIcon ~= nil
+				row.Icon.Visible = hasIcon
+				if hasIcon then
+					local rmdEntry = RMD.Classes[suggestion.ClassIcon]
+					Explorer.ClassIcons:Display(row.Icon, rmdEntry and tonumber(rmdEntry.ExplorerImageIndex) or 0)
+				end
+				row.Label.Position = UDim2.new(0, hasIcon and 24 or 6, 0, 0)
+				row.Label.Size = UDim2.new(1, hasIcon and -28 or -10, 1, 0)
+				row.Label.Text = suggestion.Label
+				row.Visible = true
+			end
+			for index = #suggestions + 1, #rows do
+				rows[index].Visible = false
+			end
+			paint()
+
+			local headerHeight = headerText and 18 or 0
+			header.Visible = headerText ~= nil
+			header.Text = headerText or ""
+			list.Position = UDim2.new(0, 0, 0, headerHeight)
+			list.Size = UDim2.new(1, 0, 1, -headerHeight)
+			list.CanvasSize = UDim2.new(0, 0, 0, #suggestions * SUGGESTION_ROW_HEIGHT)
+			list.CanvasPosition = Vector2.zero
+			frame.Size = UDim2.new(1, -6, 0, headerHeight + math.min(#suggestions, MAX_VISIBLE_SUGGESTIONS) * SUGGESTION_ROW_HEIGHT)
+			frame.Visible = true
+		end
+
+		searchBox.Focused:Connect(function()
+			refresh()
+			if keyConnection then keyConnection:Disconnect() end
+			keyConnection = service.UserInputService.InputBegan:Connect(function(input)
+				if not frame.Visible or input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+
+				local keyCode = input.KeyCode
+				if keyCode == Enum.KeyCode.Down then
+					highlighted = math.min(#suggestions, highlighted + 1)
+				elseif keyCode == Enum.KeyCode.Up then
+					highlighted = math.max(1, highlighted - 1)
+				elseif keyCode == Enum.KeyCode.Tab then
+					accept(math.max(highlighted, 1))
+					return
+				else
+					return
+				end
+				paint()
+				scrollToHighlighted()
+			end)
+		end)
+
+		searchBox.FocusLost:Connect(function(enterPressed)
+			if keyConnection then
+				keyConnection:Disconnect()
+				keyConnection = nil
+			end
+
+			if enterPressed and frame.Visible and highlighted > 0 then
+				accept(highlighted)
+				return
+			end
+
+			-- Wait so a click on a suggestion row is handled before the list hides
+			task.delay(0.15, function()
+				if not searchBox:IsFocused() then hide() end
+			end)
+			if enterPressed then Explorer.DoSearch(searchBox.Text) end
+		end)
+
+		return refresh
 	end
 
 	Explorer.InitSearch = function()
 		local searchBox = Explorer.GuiElems.ToolBar.SearchFrame.SearchBox
 		Explorer.GuiElems.SearchBar = searchBox
+		searchBox.PlaceholderText = "Search (is:Part, Anchored=true, tag:...)"
 
 		Lib.ViewportTextBox.convert(searchBox)
+		local refreshSuggestions = Explorer.InitSearchSuggestions(searchBox)
 
-		searchBox.FocusLost:Connect(function() Explorer.DoSearch(searchBox.Text) end)
+		local searchId = 0
+		searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+			-- Tab accepts a suggestion and must not end up in the query
+			if string.find(searchBox.Text, "\t", 1, true) then
+				searchBox.Text = string.gsub(searchBox.Text, "\t", "")
+				return
+			end
+
+			refreshSuggestions()
+			if not Settings.Explorer.LiveSearch then return end
+
+			searchId += 1
+			local currentId = searchId
+			task.delay(LIVE_SEARCH_DELAY, function()
+				if currentId == searchId then Explorer.DoSearch(searchBox.Text, true) end
+			end)
+		end)
+
+		Explorer.GuiElems.ToolBar.SearchFrame.Reset.MouseButton1Click:Connect(function()
+			searchId += 1
+			Explorer.ClearSearch()
+		end)
 	end
 
 	Explorer.InitEntryTemplate = function()
@@ -4124,47 +4894,33 @@ return search]==]
 		Explorer.ClickSystem = sys
 	end
 
+	-- Compacts children lists after deletions. removeObject marks the parent instead of
+	-- shifting arrays on every removal, so bulk deletions stay cheap.
 	Explorer.InitDelCleaner = function()
-		coroutine.wrap(function()
-			local fw = Lib.FastWait
-			while true do
+		task.spawn(function()
+			while not Main.Destroyed do
 				local processed = false
-				local c = 0
-				for _, node in next, nodes do
-					if node.HasDel then
-						local delInd
-						for i = 1, #node do
-							if node[i].Del then
-								delInd = i
-								break
-							end
+				for node in pendingDelParents do
+					pendingDelParents[node] = nil
+					local writeIndex = 1
+					for readIndex = 1, #node do
+						local child = node[readIndex]
+						if not child.Del then
+							node[writeIndex] = child
+							writeIndex += 1
 						end
-						if delInd then
-							for i = delInd + 1, #node do
-								local cn = node[i]
-								if not cn.Del then
-									node[delInd] = cn
-									delInd = delInd + 1
-								end
-							end
-							for i = delInd, #node do
-								node[i] = nil
-							end
-						end
-						node.HasDel = false
-						processed = true
-						fw()
 					end
-					c = c + 1
-					if c > 10000 then
-						c = 0
-						fw()
+					for index = writeIndex, #node do
+						node[index] = nil
 					end
+					node.HasDel = false
+					processed = true
 				end
+
 				if processed and not refreshDebounce then Explorer.PerformRefresh() end
-				fw(0.5)
+				task.wait(0.5)
 			end
-		end)()
+		end)
 	end
 
 	Explorer.UpdateSelectionVisuals = function()
@@ -4237,6 +4993,20 @@ return search]==]
 				end
 			end
 		end
+	end
+
+	Explorer.Destroy = function()
+		for _, connection in { descendantAddedCon, descendantRemovingCon, itemChangedCon } do
+			connection:Disconnect()
+		end
+		for _, connections in nilCons do
+			for _, connection in connections do
+				connection:Disconnect()
+			end
+		end
+		table.clear(nilCons)
+		table.clear(pendingDelParents)
+		table.clear(nodes)
 	end
 
 	Explorer.Init = function()
@@ -4446,7 +5216,7 @@ return search]==]
 end
 
 return { InitAfterMain = initAfterMain, Main = main }
-end function __DARKDEX_MODULES.o()local v=__DARKDEX_MODULES.cache.o if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.o=v end return v.c end end do local function __modImpl()--[[
+end function __DARKDEX_MODULES.r()local v=__DARKDEX_MODULES.cache.r if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.r=v end return v.c end end do local function __modImpl()--[[
 	Properties App Module
 
 	The main properties interface
@@ -4768,8 +5538,7 @@ local function main()
 								propVal = getAttribute(obj, attributeName)
 								if propVal == nil then skip = true end
 							elseif IsTag then
-								local _ = CollectionService:GetTags(obj)
-								propVal = table.find(_, attributeName) and _[table.find(_, attributeName)]
+								propVal = CollectionService:HasTag(obj, attributeName) and attributeName or nil
 								if propVal == nil then skip = true end
 							else
 								propVal = obj[propName]
@@ -4928,7 +5697,7 @@ local function main()
 				local tags = CollectionService:GetTags(obj)
 				for _, name in pairs(tags) do
 					if not foundTags[name] then
-						local tagProp = { IsTag = true, Name = "TAG_" .. name, AttributeName = name, DisplayName = _, Class = "Instance", ValueType = { Name = "string" }, Category = "Tags", Tags = {} }
+						local tagProp = { IsTag = true, Name = "TAG_" .. name, AttributeName = name, DisplayName = name, Class = "Instance", ValueType = { Name = "string" }, Category = "Tags", Tags = { ReadOnly = true } }
 						props[propCount] = tagProp
 						propCount = propCount + 1
 						tagCount = tagCount + 1
@@ -4956,7 +5725,7 @@ local function main()
 		-- Find conflicts and get auto-update instances
 		Properties.ClassLists = classLists
 		Properties.ComputeConflicts()
-		--warn("CONFLICT",tick()-start)
+		--warn("CONFLICT",os.clock()-start)
 		if #props > 0 then props[#props + 1] = Properties.AddAttributeProp end
 
 		Properties.Update()
@@ -4999,10 +5768,7 @@ local function main()
 	end
 
 	Properties.MakeSubProp = function(prop, subName, valueType, displayName)
-		local subProp = {}
-		for i, v in pairs(prop) do
-			subProp[i] = v
-		end
+		local subProp = table.clone(prop)
 		subProp.RootType = subProp.RootType or subProp.ValueType
 		subProp.ValueType = valueType
 		subProp.SubName = subProp.SubName and (subProp.SubName .. subName) or subName
@@ -5388,7 +6154,7 @@ local function main()
 			if not noplay then sound:Resume() end
 
 			coroutine.wrap(function()
-				local previewTime = tick()
+				local previewTime = os.clock()
 				Properties.SoundPreviewTime = previewTime
 				while previewTime == Properties.SoundPreviewTime and sound.Playing do
 					local entry = Properties.GetSoundPreviewEntry()
@@ -5410,7 +6176,9 @@ local function main()
 			context = Lib.ContextMenu.new()
 			context.Iconless = true
 			context.Width = 80
+			Properties.AttributeContext = context
 		end
+
 		context:Clear()
 
 		context:Add({ Name = "Edit", OnClick = function() Properties.DisplayAddAttributeWindow(prop) end })
@@ -5525,7 +6293,7 @@ local function main()
 			context.Iconless = true
 			context.MaxHeight = 200
 			context.ReverseYOffset = 22
-			Properties.EnumDropdown = context
+			Properties.EnumContext = context
 		end
 
 		if not inputProp or inputProp.ValueType.Category ~= "Enum" then return end
@@ -5705,13 +6473,8 @@ local function main()
 				return nil
 			end
 		elseif prop.IsTag then
-			local _ = CollectionService:GetTags(obj)
-			propVal = table.find(_, prop.AttributeName) and _[table.find(_, prop.AttributeName)]
-			if not propVal then return nil end
-
-			local typ = typeof(propVal)
-			local currentType = Properties.TypeNameConvert[typ] or typ
-			if prop.ValueType.Name ~= currentType then return nil end
+			if not CollectionService:HasTag(obj, prop.AttributeName) then return nil end
+			propVal = prop.AttributeName
 		else
 			propVal = obj[prop.Name]
 		end
@@ -5982,8 +6745,6 @@ local function main()
 							elseif prop.IsTag then
 								propCons[#propCons + 1] = CollectionService:GetInstanceAddedSignal(prop.AttributeName):Connect(function() Properties.DisplayProp(prop, i) end)
 								propCons[#propCons + 1] = CollectionService:GetInstanceRemovedSignal(prop.AttributeName):Connect(function() Properties.DisplayProp(prop, i) end)
-								propCons[#propCons + 1] = CollectionService.TagAdded:Connect(function() Properties.DisplayProp(prop, i) end)
-								propCons[#propCons + 1] = CollectionService.TagRemoved:Connect(function() Properties.DisplayProp(prop, i) end)
 							else
 								propCons[#propCons + 1] = getPropChangedSignal(propObj, propName):Connect(function() Properties.DisplayProp(prop, i) end)
 							end
@@ -6074,8 +6835,7 @@ local function main()
 					if prop.IsAttribute then
 						root = getAttribute(obj, attributeName)
 					elseif prop.IsTag then
-						local _ = CollectionService:GetTags(obj)
-						root = table.find(_, attributeName) and _[table.find(_, attributeName)]
+						root = CollectionService:HasTag(obj, attributeName) and attributeName or nil
 					else
 						root = obj[propName]
 					end
@@ -6102,8 +6862,13 @@ local function main()
 							local pos = (subName == ".Position" and setVal) or Vector3.new((subName == ".Position.X" and setVal) or rootPos.X, (subName == ".Position.Y" and setVal) or rootPos.Y, (subName == ".Position.Z" and setVal) or rootPos.Z)
 							local rightV = (subName == ".RightVector" and setVal) or Vector3.new((subName == ".RightVector.X" and setVal) or rootRight.X, (subName == ".RightVector.Y" and setVal) or rootRight.Y, (subName == ".RightVector.Z" and setVal) or rootRight.Z)
 							local upV = (subName == ".UpVector" and setVal) or Vector3.new((subName == ".UpVector.X" and setVal) or rootUp.X, (subName == ".UpVector.Y" and setVal) or rootUp.Y, (subName == ".UpVector.Z" and setVal) or rootUp.Z)
-							local lookV = (subName == ".LookVector" and setVal) or Vector3.new((subName == ".LookVector.X" and setVal) or rootLook.X, (subName == ".RightVector.Y" and setVal) or rootLook.Y, (subName == ".RightVector.Z" and setVal) or rootLook.Z)
-							setVal = CFrame.fromMatrix(pos, rightV, upV, -lookV)
+							local lookV = (subName == ".LookVector" and setVal) or Vector3.new((subName == ".LookVector.X" and setVal) or rootLook.X, (subName == ".LookVector.Y" and setVal) or rootLook.Y, (subName == ".LookVector.Z" and setVal) or rootLook.Z)
+							-- fromMatrix derives the back vector from Right x Up, so a LookVector edit rebuilds the rotation
+							if string.sub(subName, 1, 11) == ".LookVector" then
+								setVal = CFrame.lookAt(pos, pos + lookV, rootUp)
+							else
+								setVal = CFrame.fromMatrix(pos, rightV, upV)
+							end
 						elseif rootTypeName == "Rect" then
 							local rootMin, rootMax = root.Min, root.Max
 							local min = Vector2.new((subName == ".Min.X" and setVal) or rootMin.X, (subName == ".Min.Y" and setVal) or rootMin.Y)
@@ -6678,170 +7443,190 @@ local function main()
 end
 
 return { InitAfterMain = initAfterMain, Main = main }
-end function __DARKDEX_MODULES.p()local v=__DARKDEX_MODULES.cache.p if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.p=v end return v.c end end do local function __modImpl()--[[
+end function __DARKDEX_MODULES.s()local v=__DARKDEX_MODULES.cache.s if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.s=v end return v.c end end do local function __modImpl()--[[
 	ScriptViewer App Module
 
-	A script viewer that is basically a notepad
+	Shows decompiled scripts with copy, save and function dump tools.
 ]]
 
 
 local Context = __DARKDEX_MODULES.a()
 
-local Main = Context.Main
 local Lib = Context.Lib
-local Apps = Context.Apps
 local env = Context.env
-local ScriptViewer
 
-local function initAfterMain() ScriptViewer = Apps.ScriptViewer end
+local BUTTON_HEIGHT = 20
+
+-- Function Dumper originally made by King.Kevin
+local function dumpFunctions(scr)	
+local getgc = getgc or get_gc_objects
+	local getupvalues = (debug and debug.getupvalues) or getupvalues or getupvals
+	local getconstants = (debug and debug.getconstants) or getconstants or getconsts
+	local islclosure = islclosure or is_l_closure
+	if not (getgc and getupvalues and getconstants) then return "-- Function dump needs getgc, getupvalues and getconstants" end
+
+	local scriptPath = scr:GetFullName()
+	local nameSuffix = "." .. scr.Name
+	local output = { `\n-- // Function Dumper made by King.Kevin\n-- // Script Path: {scriptPath}\n\n--[[` }
+	local seenTables = {}
+	local dumpedAny = false
+
+	local function add(text, indent) table.insert(output, string.rep("    ", math.max(0, indent)) .. text) end
+
+	local function functionName(func)		
+local name = debug.info(func, "n")
+		return (name and name ~= "") and name or "Unknown Name"
+	end
+
+	local dumpValue
+
+	local function dumpTable(value, indent, key)
+		add(`{tostring(key)} [{typeof(value)}] {tostring(value)}`, indent - 1)
+		local count = 0
+		for _, item in value do
+			count += 1
+			dumpValue(count, item, indent)
+		end
+	end
+
+	function dumpValue(key, value, indent)
+		if type(value) == "function" then
+			add(`{key} [function] = {functionName(value)}`, indent)
+		elseif type(value) == "table" then
+			if seenTables[value] then
+				add(`{key} [table] (Recursive table detected)`, indent)
+			else
+				seenTables[value] = true
+				add(`{key} [table]:`, indent)
+				dumpTable(value, indent + 1, key)
+			end
+		else
+			add(`{key} [{typeof(value)}] = {tostring(value)}`, indent)
+		end
+	end
+
+	local function belongsToScript(func)		
+if islclosure and not islclosure(func) then return false end
+		-- Cheap source check first: getfenv on every gc function would deoptimize the game scripts.
+		-- The chunk name is the path at load time, so a moved script still matches by name.
+		local source = debug.info(func, "s")
+		if source ~= scriptPath and string.sub(source, -#nameSuffix) ~= nameSuffix then return false end
+		local success, fenv = pcall(getfenv, func)
+		return success and rawget(fenv, "script") == scr
+	end
+
+	for _, func in getgc() do
+		if type(func) == "function" and belongsToScript(func) then
+			dumpedAny = true
+			local name = functionName(func)
+			add(`\nFunction Dump: {name}`, 0)
+			add(`\nFunction Upvalues: {name}`, 0)
+			for index, upvalue in getupvalues(func) do
+				dumpValue(index, upvalue, 1)
+			end
+			add(`\nFunction Constants: {name}`, 0)
+			for index, constant in getconstants(func) do
+				dumpValue(index, constant, 1)
+			end
+			add("\n" .. string.rep("=", 100), 0)
+		end
+	end
+
+	if not dumpedAny then return nil end
+	table.insert(output, "]]")
+	return table.concat(output, "\n")
+end
+
+local function createButton(parent, text, index, count)	
+local button = Instance.new("TextButton")
+	button.BackgroundTransparency = 1
+	button.Position = UDim2.new((index - 1) / count, 0, 0, 0)
+	button.Size = UDim2.new(1 / count, 0, 0, BUTTON_HEIGHT)
+	button.Font = Enum.Font.SourceSans
+	button.TextSize = 14
+	button.Text = text
+	button.TextColor3 = Color3.new(1, 1, 1)
+	button.Parent = parent
+	return button
+end
+
+local function sanitizeFileName(name)return (string.gsub(name, "[^%w%-_ ]", "_")) end
+
+local function initAfterMain() end
 
 local function main()
 	local ScriptViewer = {}
 	local window, codeFrame
-	local PreviousScr = nil
-
-	ScriptViewer.ViewScript = function(scr)
-		local success, source = pcall(env.decompile or function() end, scr)
-		if not success or not source then
-			source, PreviousScr = "-- DEX - Source failed to decompile", nil
+	local currentScript
+	
+function ScriptViewer.ViewScript(scr)
+		local source
+		if not env.decompile then
+			source = "-- DarkDex: this executor has no decompile function"
 		else
-			PreviousScr = scr
+			local success, result = pcall(env.decompile, scr)
+			if success and type(result) == "string" then
+				source = result
+			else
+				source = `-- DarkDex: failed to decompile {scr:GetFullName()}\n-- {tostring(result)}`
+			end
 		end
-		codeFrame:SetText(source:gsub("\0", "\\0")) -- Fix stupid breaking script viewer
+
+		currentScript = scr
+
+		window:SetTitle(`Script Viewer - {scr.Name}`)
+		-- Null bytes break the TextLabel rendering
+		codeFrame:SetText((string.gsub(source, "\0", "\\0")))
 		window:Show()
 	end
 
-	ScriptViewer.Init = function()
+	-- Shows generated text, such as tool results, instead of a script
+	function ScriptViewer.ShowText(title, text)
+		currentScript = nil
+		window:SetTitle(`Script Viewer - {title}`)
+		codeFrame:SetText(text)
+		window:Show()
+	end
+
+	function ScriptViewer.Init()
 		window = Lib.Window.new()
 		window:SetTitle("Script Viewer")
 		window:Resize(500, 400)
 		ScriptViewer.Window = window
 
+		local content = window.GuiElems.Content
+
 		codeFrame = Lib.CodeFrame.new()
-		codeFrame.Frame.Position = UDim2.new(0, 0, 0, 20)
-		codeFrame.Frame.Size = UDim2.new(1, 0, 1, -20)
-		codeFrame.Frame.Parent = window.GuiElems.Content
+		codeFrame.Frame.Position = UDim2.new(0, 0, 0, BUTTON_HEIGHT)
+		codeFrame.Frame.Size = UDim2.new(1, 0, 1, -BUTTON_HEIGHT)
+		codeFrame.Frame.Parent = content
 
-		-- TODO: REMOVE AND MAKE BETTER
-		local copy = Instance.new("TextButton", window.GuiElems.Content)
-		copy.BackgroundTransparency = 1
-		copy.Size = UDim2.new(0.5, 0, 0, 20)
-		copy.Text = "Copy to Clipboard"
-		copy.TextColor3 = Color3.new(1, 1, 1)
+		local copyButton = createButton(content, "Copy to Clipboard", 1, 3)
+		local saveButton = createButton(content, "Save to File", 2, 3)
+		local dumpButton = createButton(content, "Dump Functions", 3, 3)
 
-		copy.MouseButton1Click:Connect(function()
-			local source = codeFrame:GetText()
-			env.setclipboard(source)
+		copyButton.MouseButton1Click:Connect(function()
+			if env.setclipboard then env.setclipboard(codeFrame:GetText()) end
 		end)
 
-		local save = Instance.new("TextButton", window.GuiElems.Content)
-		save.BackgroundTransparency = 1
-		save.Position = UDim2.new(0.35, 0, 0, 0)
-		save.Size = UDim2.new(0.3, 0, 0, 20)
-		save.Text = "Save to File"
-		save.TextColor3 = Color3.new(1, 1, 1)
+		saveButton.MouseButton1Click:Connect(function()
+			if not env.writefile then return end
 
-		save.MouseButton1Click:Connect(function()
-			local source = codeFrame:GetText()
-			local filename = "Place_" .. game.PlaceId .. "_Script_" .. os.time() .. ".txt"
-
-			env.writefile(filename, source)
-			if env.movefileas then env.movefileas(filename, ".txt") end
+			local name = currentScript and sanitizeFileName(currentScript.Name) or "Script"
+			local fileName = `dex/saved/Place_{game.PlaceId}_{name}_{os.time()}.lua`
+			local success, err = pcall(env.writefile, fileName, codeFrame:GetText())
+			if not success then warn(`[DarkDex] Failed to save {fileName}: {err}`) end
 		end)
 
-		local dumpbtn = Instance.new("TextButton", window.GuiElems.Content)
-		dumpbtn.BackgroundTransparency = 1
-		dumpbtn.Position = UDim2.new(0.7, 0, 0, 0)
-		dumpbtn.Size = UDim2.new(0.3, 0, 0, 20)
-		dumpbtn.Text = "Dump Functions"
-		dumpbtn.TextColor3 = Color3.new(1, 1, 1)
+		dumpButton.MouseButton1Click:Connect(function()
+			if not currentScript then return end
 
-		dumpbtn.MouseButton1Click:Connect(function()
-			if PreviousScr ~= nil then
-				pcall(function()
-					-- thanks King.Kevin#6025 you'll obviously be credited (no discord tag since that can easily be impersonated)
-					local getgc = getgc or get_gc_objects
-					local getupvalues = (debug and debug.getupvalues) or getupvalues or getupvals
-					local getconstants = (debug and debug.getconstants) or getconstants or getconsts
-					local getinfo = (debug and (debug.getinfo or debug.info)) or getinfo
-					local original = ("\n-- // Function Dumper made by King.Kevin\n-- // Script Path: %s\n\n--[["):format(PreviousScr:GetFullName())
-					local dump = original
-					local functions, function_count, data_base = {}, 0, {}
-					function functions:add_to_dump(str, indentation, new_line)
-						local new_line = new_line or true
-						dump = dump .. ("%s%s%s"):format(string.rep("    ", indentation), tostring(str), new_line and "\n" or "")
-					end
-					function functions:get_function_name(func)
-						local n = getinfo(func).name
-						return n ~= "" and n or "Unknown Name"
-					end
-					function functions:dump_table(input, indent, index)
-						local indent = indent < 0 and 0 or indent
-						functions:add_to_dump(("%s [%s] %s"):format(tostring(index), tostring(typeof(input)), tostring(input)), indent - 1)
-						local count = 0
-						for index, value in pairs(input) do
-							count = count + 1
-							if type(value) == "function" then
-								functions:add_to_dump(("%d [function] = %s"):format(count, functions:get_function_name(value)), indent)
-							elseif type(value) == "table" then
-								if not data_base[value] then
-									data_base[value] = true
-									functions:add_to_dump(("%d [table]:"):format(count), indent)
-									functions:dump_table(value, indent + 1, index)
-								else
-									functions:add_to_dump(("%d [table] (Recursive table detected)"):format(count), indent)
-								end
-							else
-								functions:add_to_dump(("%d [%s] = %s"):format(count, tostring(typeof(value)), tostring(value)), indent)
-							end
-						end
-					end
-					function functions:dump_function(input, indent)
-						functions:add_to_dump(("\nFunction Dump: %s"):format(functions:get_function_name(input)), indent)
-						functions:add_to_dump(("\nFunction Upvalues: %s"):format(functions:get_function_name(input)), indent)
-						for index, upvalue in pairs(getupvalues(input)) do
-							if type(upvalue) == "function" then
-								functions:add_to_dump(("%d [function] = %s"):format(index, functions:get_function_name(upvalue)), indent + 1)
-							elseif type(upvalue) == "table" then
-								if not data_base[upvalue] then
-									data_base[upvalue] = true
-									functions:add_to_dump(("%d [table]:"):format(index), indent + 1)
-									functions:dump_table(upvalue, indent + 2, index)
-								else
-									functions:add_to_dump(("%d [table] (Recursive table detected)"):format(index), indent + 1)
-								end
-							else
-								functions:add_to_dump(("%d [%s] = %s"):format(index, tostring(typeof(upvalue)), tostring(upvalue)), indent + 1)
-							end
-						end
-						functions:add_to_dump(("\nFunction Constants: %s"):format(functions:get_function_name(input)), indent)
-						for index, constant in pairs(getconstants(input)) do
-							if type(constant) == "function" then
-								functions:add_to_dump(("%d [function] = %s"):format(index, functions:get_function_name(constant)), indent + 1)
-							elseif type(constant) == "table" then
-								if not data_base[constant] then
-									data_base[constant] = true
-									functions:add_to_dump(("%d [table]:"):format(index), indent + 1)
-									functions:dump_table(constant, indent + 2, index)
-								else
-									functions:add_to_dump(("%d [table] (Recursive table detected)"):format(index), indent + 1)
-								end
-							else
-								functions:add_to_dump(("%d [%s] = %s"):format(index, tostring(typeof(constant)), tostring(constant)), indent + 1)
-							end
-						end
-					end
-					for _, _function in pairs(getgc()) do
-						if typeof(_function) == "function" and getfenv(_function).script and getfenv(_function).script == PreviousScr then
-							functions:dump_function(_function, 0)
-							functions:add_to_dump("\n" .. ("="):rep(100), 0, false)
-						end
-					end
-					local source = codeFrame:GetText()
-					if dump ~= original then source = source .. dump .. "]]" end
-					codeFrame:SetText(source)
-				end)
+			local success, dump = pcall(dumpFunctions, currentScript)
+			if not success then
+				warn(`[DarkDex] Function dump failed: {dump}`)
+				return
 			end
+			if dump then codeFrame:SetText(codeFrame:GetText() .. dump) end
 		end)
 	end
 
@@ -6849,45 +7634,73 @@ local function main()
 end
 
 return { InitAfterMain = initAfterMain, Main = main }
-end function __DARKDEX_MODULES.q()local v=__DARKDEX_MODULES.cache.q if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.q=v end return v.c end end do local function __modImpl()
-local funcs = {}
+end function __DARKDEX_MODULES.t()local v=__DARKDEX_MODULES.cache.t if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.t=v end return v.c end end do local function __modImpl()
 
-local disconnect = function(con)
-	local pos = table.find(con.Signal.Connections, con)
-	if pos then table.remove(con.Signal.Connections, pos) end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+local function disconnect(connection)
+	if not connection.Connected then return end
+	connection.Connected = false
+
+	local connections = connection.Signal.Connections
+	local index = table.find(connections, connection)
+	if index then table.remove(connections, index) end
 end
 
-funcs.Connect = function(self, func)
-	if type(func) ~= "function" then error("Attempt to connect a non-function") end
-	local con = {
+local methods = {}
+
+function methods.Connect(self, func)	
+assert(type(func) == "function", "Attempt to connect a non-function")
+
+	local connection= {
 		Signal = self,
 		Func = func,
+		Connected = true,
 		Disconnect = disconnect,
 	}
-	self.Connections[#self.Connections + 1] = con
-	return con
+	table.insert(self.Connections, connection)
+	return connection
 end
 
-funcs.Fire = function(self, ...)
-	for i, v in next, self.Connections do
-		xpcall(coroutine.wrap(v.Func), function(e) warn(e .. "\n" .. debug.traceback()) end, ...)
+function methods.Fire(self, ...)
+	-- Handlers may disconnect while firing, so iterate over a snapshot
+	for _, connection in table.clone(self.Connections) do
+		if connection.Connected then task.spawn(connection.Func, ...) end
 	end
 end
 
-local mt = {
-	__index = funcs,
-	__tostring = function(self) return "Signal: " .. tostring(#self.Connections) .. " Connections" end,
-}
-
-local function new()
-	local obj = {}
-	obj.Connections = {}
-
-	return setmetatable(obj, mt)
+function methods.DisconnectAll(self)
+	for _, connection in self.Connections do
+		connection.Connected = false
+	end
+	table.clear(self.Connections)
 end
 
+local metatable = {
+	__index = methods,
+	__tostring = function(self) return `Signal: {#self.Connections} Connections` end,
+}
+
+local function new()return (setmetatable({ Connections = {} }, metatable) )end
+
 return { new = new }
-end function __DARKDEX_MODULES.r()local v=__DARKDEX_MODULES.cache.r if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.r=v end return v.c end end do local function __modImpl()
+end function __DARKDEX_MODULES.u()local v=__DARKDEX_MODULES.cache.u if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.u=v end return v.c end end do local function __modImpl()
 local Context = __DARKDEX_MODULES.a()
 
 local Lib = Context.Lib
@@ -6985,7 +7798,7 @@ local function new()
 end
 
 return { new = new }
-end function __DARKDEX_MODULES.s()local v=__DARKDEX_MODULES.cache.s if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.s=v end return v.c end end do local function __modImpl()
+end function __DARKDEX_MODULES.v()local v=__DARKDEX_MODULES.cache.v if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.v=v end return v.c end end do local function __modImpl()
 local funcs = {}
 
 funcs.GetLabel = function(self)
@@ -7044,7 +7857,12 @@ local function newLinear(mapId, iconSizeX, iconSizeY)
 end
 
 return { new = new, newLinear = newLinear }
-end function __DARKDEX_MODULES.t()local v=__DARKDEX_MODULES.cache.t if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.t=v end return v.c end end do local function __modImpl()
+end function __DARKDEX_MODULES.w()local v=__DARKDEX_MODULES.cache.w if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.w=v end return v.c end end do local function __modImpl()--[[
+	Scroll bar measured in items: Index is the first visible item, VisibleSpace the
+	number of visible items and TotalSpace the item count. Scrolled fires on changes.
+]]
+
+
 local Context = __DARKDEX_MODULES.a()
 local Create = __DARKDEX_MODULES.e()
 
@@ -7053,439 +7871,340 @@ local service = Context.service
 local plr = Context.plr
 local createSimple = Create.createSimple
 
-local funcs = {}
-local user = service.UserInputService
+local UserInputService = service.UserInputService
 local mouse = plr:GetMouse()
-local checkMouseInGui = Lib.CheckMouseInGui
-local createArrow = Lib.CreateArrow
+
+local HOLD_DELAY = 0.3
+local MIN_THUMB_SIZE = 16
+local THUMB_COLOR = Color3.fromRGB(60, 60, 60)
+local THUMB_SELECT_COLOR = Color3.fromRGB(75, 75, 75)
+local FRAME_COLOR = Color3.fromRGB(40, 40, 40)
+local BUTTON_COLOR = Color3.fromRGB(75, 75, 75)
+local ARROW_COLOR = Color3.new(1, 1, 1)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+local methods = {}
+
+local function isMouseButton1(input)return input.UserInputType == Enum.UserInputType.MouseButton1 end
+
+-- Calls onRelease once when the left mouse button is released
+local function onMouseRelease(onRelease)
+	local connection
+	connection = UserInputService.InputEnded:Connect(function(input)
+		if not isMouseButton1(input) then return end
+		connection:Disconnect()
+		onRelease()
+	end)
+	return connection
+end
 
 local function drawThumb(self)
-	local total = self.TotalSpace
-	local visible = self.VisibleSpace
-	local index = self.Index
-	local scrollThumb = self.GuiElems.ScrollThumb
-	local scrollThumbFrame = self.GuiElems.ScrollThumbFrame
+	local thumb = self.GuiElems.ScrollThumb
+	local thumbFrame = self.GuiElems.ScrollThumbFrame
+	local total, visible = self.TotalSpace, self.VisibleSpace
 
-	if not (self:CanScrollUp() or self:CanScrollDown()) then
-		scrollThumb.Visible = false
-	else
-		scrollThumb.Visible = true
-	end
+	thumb.Visible = self:CanScrollUp() or self:CanScrollDown()
+	if not thumb.Visible then return end
 
-	if self.Horizontal then
-		scrollThumb.Size = UDim2.new(visible / total, 0, 1, 0)
-		if scrollThumb.AbsoluteSize.X < 16 then scrollThumb.Size = UDim2.new(0, 16, 1, 0) end
-		local fs = scrollThumbFrame.AbsoluteSize.X
-		local bs = scrollThumb.AbsoluteSize.X
-		scrollThumb.Position = UDim2.new(self:GetScrollPercent() * (fs - bs) / fs, 0, 0, 0)
-	else
-		scrollThumb.Size = UDim2.new(1, 0, visible / total, 0)
-		if scrollThumb.AbsoluteSize.Y < 16 then scrollThumb.Size = UDim2.new(1, 0, 0, 16) end
-		local fs = scrollThumbFrame.AbsoluteSize.Y
-		local bs = scrollThumb.AbsoluteSize.Y
-		scrollThumb.Position = UDim2.new(0, 0, self:GetScrollPercent() * (fs - bs) / fs, 0)
-	end
+	local axis = self.Horizontal and "X" or "Y"
+	local fraction = visible / total
+	thumb.Size = self.Horizontal and UDim2.new(fraction, 0, 1, 0) or UDim2.new(1, 0, fraction, 0)
+	if thumb.AbsoluteSize[axis] < MIN_THUMB_SIZE then thumb.Size = self.Horizontal and UDim2.new(0, MIN_THUMB_SIZE, 1, 0) or UDim2.new(1, 0, 0, MIN_THUMB_SIZE) end
+
+	local frameSize = thumbFrame.AbsoluteSize[axis]
+	local offset = frameSize > 0 and self:GetScrollPercent() * (frameSize - thumb.AbsoluteSize[axis]) / frameSize or 0
+	thumb.Position = self.Horizontal and UDim2.new(offset, 0, 0, 0) or UDim2.new(0, 0, offset, 0)
 end
 
-local function createFrame(self)
-	local newFrame = createSimple("Frame", {
-		Style = 0,
-		Active = true,
-		AnchorPoint = Vector2.new(0, 0),
-		BackgroundColor3 = Color3.new(0.35294118523598, 0.35294118523598, 0.35294118523598),
-		BackgroundTransparency = 0,
-		BorderColor3 = Color3.new(0.10588236153126, 0.16470588743687, 0.20784315466881),
-		BorderSizePixel = 0,
-		ClipsDescendants = false,
-		Draggable = false,
-		Position = UDim2.new(1, -16, 0, 0),
-		Rotation = 0,
-		Selectable = false,
-		Size = UDim2.new(0, 16, 1, 0),
-		SizeConstraint = 0,
-		Visible = true,
-		ZIndex = 1,
-		Name = "ScrollBar",
-	})
-	local button1 = nil
-	local button2 = nil
-
-	if self.Horizontal then
-		newFrame.Size = UDim2.new(1, 0, 0, 16)
-		button1 = createSimple("ImageButton", {
-			Parent = newFrame,
-			Name = "Left",
-			Size = UDim2.new(0, 16, 0, 16),
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			AutoButtonColor = false,
-		})
-		createArrow(16, 4, "left").Parent = button1
-		button2 = createSimple("ImageButton", {
-			Parent = newFrame,
-			Name = "Right",
-			Position = UDim2.new(1, -16, 0, 0),
-			Size = UDim2.new(0, 16, 0, 16),
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			AutoButtonColor = false,
-		})
-		createArrow(16, 4, "right").Parent = button2
-	else
-		newFrame.Size = UDim2.new(0, 16, 1, 0)
-		button1 = createSimple("ImageButton", {
-			Parent = newFrame,
-			Name = "Up",
-			Size = UDim2.new(0, 16, 0, 16),
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			AutoButtonColor = false,
-		})
-		createArrow(16, 4, "up").Parent = button1
-		button2 = createSimple("ImageButton", {
-			Parent = newFrame,
-			Name = "Down",
-			Position = UDim2.new(0, 0, 1, -16),
-			Size = UDim2.new(0, 16, 0, 16),
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			AutoButtonColor = false,
-		})
-		createArrow(16, 4, "down").Parent = button2
-	end
-
-	local scrollThumbFrame = createSimple("Frame", {
+local function createArrowButton(parent, name, position, direction)	
+local button = createSimple("ImageButton", {
+		Name = name,
+		Position = position,
+		Size = UDim2.new(0, 16, 0, 16),
 		BackgroundTransparency = 1,
-		Parent = newFrame,
-	})
-	if self.Horizontal then
-		scrollThumbFrame.Position = UDim2.new(0, 16, 0, 0)
-		scrollThumbFrame.Size = UDim2.new(1, -32, 1, 0)
-	else
-		scrollThumbFrame.Position = UDim2.new(0, 0, 0, 16)
-		scrollThumbFrame.Size = UDim2.new(1, 0, 1, -32)
-	end
-
-	local scrollThumb = createSimple("Frame", {
-		BackgroundColor3 = Color3.new(120 / 255, 120 / 255, 120 / 255),
 		BorderSizePixel = 0,
-		Parent = scrollThumbFrame,
+		AutoButtonColor = false,
+		Parent = parent,
 	})
+	Lib.CreateArrow(16, 4, direction).Parent = button
+	return button
+end
 
-	local markerFrame = createSimple("Frame", {
-		BackgroundTransparency = 1,
-		Name = "Markers",
-		Size = UDim2.new(1, 0, 1, 0),
-		Parent = scrollThumbFrame,
-	})
+-- Arrow button that scrolls once on press and repeatedly while held
+local function bindArrowButton(self, button, canScroll, scroll)
+	local isHeld = false
 
-	local buttonPress = false
-	local thumbPress = false
-	local thumbFramePress = false
+	button.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement and not isHeld and canScroll() then button.BackgroundTransparency = 0.8 end
+		if not isMouseButton1(input) or not canScroll() then return end
 
-	--local thumbColor = Color3.new(120/255,120/255,120/255)
-	--local thumbSelectColor = Color3.new(140/255,140/255,140/255)
-	button1.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseMovement and not buttonPress and self:CanScrollUp() then button1.BackgroundTransparency = 0.8 end
-		if input.UserInputType ~= Enum.UserInputType.MouseButton1 or not self:CanScrollUp() then return end
-		buttonPress = true
-		button1.BackgroundTransparency = 0.5
-		if self:CanScrollUp() then
-			self:ScrollUp()
-			self.Scrolled:Fire()
-		end
-		local buttonTick = tick()
-		local releaseEvent
-		releaseEvent = user.InputEnded:Connect(function(input)
-			if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
-			releaseEvent:Disconnect()
-			if checkMouseInGui(button1) and self:CanScrollUp() then
-				button1.BackgroundTransparency = 0.8
-			else
-				button1.BackgroundTransparency = 1
-			end
-			buttonPress = false
+		isHeld = true
+		button.BackgroundTransparency = 0.5
+		scroll()
+		self.Scrolled:Fire()
+
+		onMouseRelease(function()
+			isHeld = false
+			button.BackgroundTransparency = (Lib.CheckMouseInGui(button) and canScroll()) and 0.8 or 1
 		end)
-		while buttonPress do
-			if tick() - buttonTick >= 0.3 and self:CanScrollUp() then
-				self:ScrollUp()
+
+		local pressedAt = os.clock()
+		while isHeld do
+			if os.clock() - pressedAt >= HOLD_DELAY and canScroll() then
+				scroll()
 				self.Scrolled:Fire()
 			end
-			wait()
+			task.wait()
 		end
-	end)
-	button1.InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseMovement and not buttonPress then button1.BackgroundTransparency = 1 end
-	end)
-	button2.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseMovement and not buttonPress and self:CanScrollDown() then button2.BackgroundTransparency = 0.8 end
-		if input.UserInputType ~= Enum.UserInputType.MouseButton1 or not self:CanScrollDown() then return end
-		buttonPress = true
-		button2.BackgroundTransparency = 0.5
-		if self:CanScrollDown() then
-			self:ScrollDown()
-			self.Scrolled:Fire()
-		end
-		local buttonTick = tick()
-		local releaseEvent
-		releaseEvent = user.InputEnded:Connect(function(input)
-			if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
-			releaseEvent:Disconnect()
-			if checkMouseInGui(button2) and self:CanScrollDown() then
-				button2.BackgroundTransparency = 0.8
-			else
-				button2.BackgroundTransparency = 1
-			end
-			buttonPress = false
-		end)
-		while buttonPress do
-			if tick() - buttonTick >= 0.3 and self:CanScrollDown() then
-				self:ScrollDown()
-				self.Scrolled:Fire()
-			end
-			wait()
-		end
-	end)
-	button2.InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseMovement and not buttonPress then button2.BackgroundTransparency = 1 end
 	end)
 
-	scrollThumb.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseMovement and not thumbPress then
-			scrollThumb.BackgroundTransparency = 0.2
-			scrollThumb.BackgroundColor3 = self.ThumbSelectColor
+	button.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement and not isHeld then button.BackgroundTransparency = 1 end
+	end)
+end
+
+local function bindThumb(self, thumb, thumbFrame)
+	local isDragging = false
+
+	thumb.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement and not isDragging then
+			thumb.BackgroundTransparency = 0.2
+			thumb.BackgroundColor3 = self.ThumbSelectColor
 		end
-		if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+		if not isMouseButton1(input) then return end
 
-		local dir = self.Horizontal and "X" or "Y"
-		local lastThumbPos = nil
+		local axis = self.Horizontal and "X" or "Y"
+		local mouseOffset = mouse[axis] - thumb.AbsolutePosition[axis]
+		local lastPosition = nil
+		local moveConnection
 
-		buttonPress = false
-		thumbFramePress = false
-		thumbPress = true
-		scrollThumb.BackgroundTransparency = 0
-		local mouseOffset = mouse[dir] - scrollThumb.AbsolutePosition[dir]
-		local mouseStart = mouse[dir]
-		local releaseEvent
-		local mouseEvent
-		releaseEvent = user.InputEnded:Connect(function(input)
-			if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
-			releaseEvent:Disconnect()
-			if mouseEvent then mouseEvent:Disconnect() end
-			if checkMouseInGui(scrollThumb) then
-				scrollThumb.BackgroundTransparency = 0.2
-			else
-				scrollThumb.BackgroundTransparency = 0
-				scrollThumb.BackgroundColor3 = self.ThumbColor
-			end
-			thumbPress = false
-		end)
+		isDragging = true
+		thumb.BackgroundTransparency = 0
 		self:Update()
 
-		mouseEvent = user.InputChanged:Connect(function(input)
-			if input.UserInputType == Enum.UserInputType.MouseMovement and thumbPress and releaseEvent.Connected then
-				local thumbFrameSize = scrollThumbFrame.AbsoluteSize[dir] - scrollThumb.AbsoluteSize[dir]
-				local pos = mouse[dir] - scrollThumbFrame.AbsolutePosition[dir] - mouseOffset
-				if pos > thumbFrameSize then
-					pos = thumbFrameSize
-				elseif pos < 0 then
-					pos = 0
-				end
-				if lastThumbPos ~= pos then
-					lastThumbPos = pos
-					self:ScrollTo(math.floor(0.5 + pos / thumbFrameSize * (self.TotalSpace - self.VisibleSpace)))
-				end
-				wait()
+		onMouseRelease(function()
+			isDragging = false
+			moveConnection:Disconnect()
+			if Lib.CheckMouseInGui(thumb) then
+				thumb.BackgroundTransparency = 0.2
+			else
+				thumb.BackgroundTransparency = 0
+				thumb.BackgroundColor3 = self.ThumbColor
 			end
 		end)
+
+		moveConnection = UserInputService.InputChanged:Connect(function(movement)
+			if movement.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+
+			local trackSize = thumbFrame.AbsoluteSize[axis] - thumb.AbsoluteSize[axis]
+			if trackSize <= 0 then return end
+
+			local position = math.clamp(mouse[axis] - thumbFrame.AbsolutePosition[axis] - mouseOffset, 0, trackSize)
+			if position == lastPosition then return end
+
+			lastPosition = position
+			self:ScrollTo(math.floor(0.5 + position / trackSize * (self.TotalSpace - self.VisibleSpace)))
+		end)
 	end)
-	scrollThumb.InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseMovement and not thumbPress then
-			scrollThumb.BackgroundTransparency = 0
-			scrollThumb.BackgroundColor3 = self.ThumbColor
+
+	thumb.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement and not isDragging then
+			thumb.BackgroundTransparency = 0
+			thumb.BackgroundColor3 = self.ThumbColor
 		end
 	end)
-	scrollThumbFrame.InputBegan:Connect(function(input)
-		if input.UserInputType ~= Enum.UserInputType.MouseButton1 or checkMouseInGui(scrollThumb) then return end
 
-		local dir = self.Horizontal and "X" or "Y"
-		local scrollDir = 0
-		if mouse[dir] >= scrollThumb.AbsolutePosition[dir] + scrollThumb.AbsoluteSize[dir] then scrollDir = 1 end
+	-- Clicking the track pages towards the mouse, repeating while held
+	thumbFrame.InputBegan:Connect(function(input)
+		if not isMouseButton1(input) or Lib.CheckMouseInGui(thumb) then return end
 
-		local function doTick()
-			local scrollSize = self.VisibleSpace - 1
-			if scrollDir == 0 and mouse[dir] < scrollThumb.AbsolutePosition[dir] then
-				self:ScrollTo(self.Index - scrollSize)
-			elseif scrollDir == 1 and mouse[dir] >= scrollThumb.AbsolutePosition[dir] + scrollThumb.AbsoluteSize[dir] then
-				self:ScrollTo(self.Index + scrollSize)
+		local axis = self.Horizontal and "X" or "Y"
+		local isForward = mouse[axis] >= thumb.AbsolutePosition[axis] + thumb.AbsoluteSize[axis]
+		local isHeld = true
+
+		local function page()
+			local pageSize = self.VisibleSpace - 1
+			local thumbStart = thumb.AbsolutePosition[axis]
+			if not isForward and mouse[axis] < thumbStart then
+				self:ScrollTo(self.Index - pageSize)
+			elseif isForward and mouse[axis] >= thumbStart + thumb.AbsoluteSize[axis] then
+				self:ScrollTo(self.Index + pageSize)
 			end
 		end
 
-		thumbPress = false
-		thumbFramePress = true
-		doTick()
-		local thumbFrameTick = tick()
-		local releaseEvent
-		releaseEvent = user.InputEnded:Connect(function(input)
-			if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
-			releaseEvent:Disconnect()
-			thumbFramePress = false
-		end)
-		while thumbFramePress do
-			if tick() - thumbFrameTick >= 0.3 and checkMouseInGui(scrollThumbFrame) then doTick() end
-			wait()
+		page()
+		onMouseRelease(function() isHeld = false end)
+
+		local pressedAt = os.clock()
+		while isHeld do
+			if os.clock() - pressedAt >= HOLD_DELAY and Lib.CheckMouseInGui(thumbFrame) then page() end
+			task.wait()
 		end
 	end)
-
-	newFrame.MouseWheelForward:Connect(function() self:ScrollTo(self.Index - self.WheelIncrement) end)
-
-	newFrame.MouseWheelBackward:Connect(function() self:ScrollTo(self.Index + self.WheelIncrement) end)
-
-	self.GuiElems.ScrollThumb = scrollThumb
-	self.GuiElems.ScrollThumbFrame = scrollThumbFrame
-	self.GuiElems.Button1 = button1
-	self.GuiElems.Button2 = button2
-	self.GuiElems.MarkerFrame = markerFrame
-
-	return newFrame
 end
 
-funcs.Update = function(self, nocallback)
-	local total = self.TotalSpace
-	local visible = self.VisibleSpace
-	local index = self.Index
-	local button1 = self.GuiElems.Button1
-	local button2 = self.GuiElems.Button2
+local function createFrame(self)	
+local isHorizontal = self.Horizontal
+	local frame = createSimple("Frame", {
+		Name = "ScrollBar",
+		Active = true,
+		BorderSizePixel = 0,
+		Position = UDim2.new(1, -16, 0, 0),
+		Size = isHorizontal and UDim2.new(1, 0, 0, 16) or UDim2.new(0, 16, 1, 0),
+	})
 
-	self.Index = math.clamp(self.Index, 0, math.max(0, total - visible))
+	local button1 = createArrowButton(frame, isHorizontal and "Left" or "Up", UDim2.new(), isHorizontal and "left" or "up")
+	local button2 = createArrowButton(frame, isHorizontal and "Right" or "Down", isHorizontal and UDim2.new(1, -16, 0, 0) or UDim2.new(0, 0, 1, -16), isHorizontal and "right" or "down")
 
-	if self.LastTotalSpace ~= self.TotalSpace then
-		self.LastTotalSpace = self.TotalSpace
-		self:UpdateMarkers()
-	end
+	local thumbFrame = createSimple("Frame", {
+		BackgroundTransparency = 1,
+		Position = isHorizontal and UDim2.new(0, 16, 0, 0) or UDim2.new(0, 0, 0, 16),
+		Size = isHorizontal and UDim2.new(1, -32, 1, 0) or UDim2.new(1, 0, 1, -32),
+		Parent = frame,
+	})
 
-	if self:CanScrollUp() then
-		for i, v in pairs(button1.Arrow:GetChildren()) do
-			v.BackgroundTransparency = 0
-		end
-	else
-		button1.BackgroundTransparency = 1
-		for i, v in pairs(button1.Arrow:GetChildren()) do
-			v.BackgroundTransparency = 0.5
-		end
+	local thumb = createSimple("Frame", {
+		BorderSizePixel = 0,
+		Parent = thumbFrame,
+	})
+
+	bindArrowButton(self, button1, function() return self:CanScrollUp() end, function() self:ScrollUp() end)
+	bindArrowButton(self, button2, function() return self:CanScrollDown() end, function() self:ScrollDown() end)
+	bindThumb(self, thumb, thumbFrame)
+
+	frame.MouseWheelForward:Connect(function() self:ScrollTo(self.Index - self.WheelIncrement) end)
+	frame.MouseWheelBackward:Connect(function() self:ScrollTo(self.Index + self.WheelIncrement) end)
+
+	self.GuiElems.ScrollThumb = thumb
+	self.GuiElems.ScrollThumbFrame = thumbFrame
+	self.GuiElems.Button1 = button1
+	self.GuiElems.Button2 = button2
+	self.GuiElems.Arrow1Lines = button1.Arrow:GetChildren()
+	self.GuiElems.Arrow2Lines = button2.Arrow:GetChildren()
+
+	return frame
+end
+
+local function setLinesTransparency(lines, transparency)
+	for _, line in lines do
+		line.BackgroundTransparency = transparency
 	end
-	if self:CanScrollDown() then
-		for i, v in pairs(button2.Arrow:GetChildren()) do
-			v.BackgroundTransparency = 0
-		end
-	else
-		button2.BackgroundTransparency = 1
-		for i, v in pairs(button2.Arrow:GetChildren()) do
-			v.BackgroundTransparency = 0.5
-		end
-	end
+end
+
+function methods.Update(self)
+	local elems = self.GuiElems
+	self.Index = math.clamp(self.Index, 0, math.max(0, self.TotalSpace - self.VisibleSpace))
+
+	local canScrollUp = self:CanScrollUp()
+	if not canScrollUp then elems.Button1.BackgroundTransparency = 1 end
+	setLinesTransparency(elems.Arrow1Lines, canScrollUp and 0 or 0.5)
+
+	local canScrollDown = self:CanScrollDown()
+	if not canScrollDown then elems.Button2.BackgroundTransparency = 1 end
+	setLinesTransparency(elems.Arrow2Lines, canScrollDown and 0 or 0.5)
 
 	drawThumb(self)
 end
 
-funcs.UpdateMarkers = function(self)
-	local markerFrame = self.GuiElems.MarkerFrame
-	markerFrame:ClearAllChildren()
-
-	for i, v in pairs(self.Markers) do
-		if i < self.TotalSpace then
-			createSimple("Frame", {
-				BackgroundTransparency = 0,
-				BackgroundColor3 = v,
-				BorderSizePixel = 0,
-				Position = self.Horizontal and UDim2.new(i / self.TotalSpace, 0, 1, -6) or UDim2.new(1, -6, i / self.TotalSpace, 0),
-				Size = self.Horizontal and UDim2.new(0, 1, 0, 6) or UDim2.new(0, 6, 0, 1),
-				Name = "Marker" .. tostring(i),
-				Parent = markerFrame,
-			})
-		end
-	end
+function methods.ScrollTo(self, index, noCallback)
+	self.Index = index
+	self:Update()
+	if not noCallback then self.Scrolled:Fire() end
 end
 
-funcs.AddMarker = function(self, ind, color) self.Markers[ind] = color or Color3.new(0, 0, 0) end
-funcs.ScrollTo = function(self, ind, nocallback)
-	self.Index = ind
-	self:Update()
-	if not nocallback then self.Scrolled:Fire() end
-end
-funcs.ScrollUp = function(self)
-	self.Index = self.Index - self.Increment
-	self:Update()
-end
-funcs.ScrollDown = function(self)
-	self.Index = self.Index + self.Increment
-	self:Update()
-end
-funcs.CanScrollUp = function(self) return self.Index > 0 end
-funcs.CanScrollDown = function(self) return self.Index + self.VisibleSpace < self.TotalSpace end
-funcs.GetScrollPercent = function(self) return self.Index / (self.TotalSpace - self.VisibleSpace) end
-funcs.SetScrollPercent = function(self, perc)
-	self.Index = math.floor(perc * (self.TotalSpace - self.VisibleSpace))
+function methods.ScrollUp(self)
+	self.Index -= self.Increment
 	self:Update()
 end
 
-funcs.Texture = function(self, data)
-	self.ThumbColor = data.ThumbColor or Color3.new(0, 0, 0)
-	self.ThumbSelectColor = data.ThumbSelectColor or Color3.new(0, 0, 0)
-	self.GuiElems.ScrollThumb.BackgroundColor3 = data.ThumbColor or Color3.new(0, 0, 0)
-	self.Gui.BackgroundColor3 = data.FrameColor or Color3.new(0, 0, 0)
-	self.GuiElems.Button1.BackgroundColor3 = data.ButtonColor or Color3.new(0, 0, 0)
-	self.GuiElems.Button2.BackgroundColor3 = data.ButtonColor or Color3.new(0, 0, 0)
-	for i, v in pairs(self.GuiElems.Button1.Arrow:GetChildren()) do
-		v.BackgroundColor3 = data.ArrowColor or Color3.new(0, 0, 0)
+function methods.ScrollDown(self)
+	self.Index += self.Increment
+	self:Update()
+end
+
+function methods.CanScrollUp(self)return self.Index > 0 end
+
+function methods.CanScrollDown(self)return self.Index + self.VisibleSpace < self.TotalSpace end
+
+function methods.GetScrollPercent(self)	
+local scrollable = self.TotalSpace - self.VisibleSpace
+	return scrollable > 0 and self.Index / scrollable or 0
+end
+
+function methods.SetScrollPercent(self, percent)
+	self.Index = math.floor(percent * (self.TotalSpace - self.VisibleSpace))
+	self:Update()
+end
+
+function methods.Texture(self, data)
+	local elems = self.GuiElems
+	self.ThumbColor = data.ThumbColor or Color3.new()
+	self.ThumbSelectColor = data.ThumbSelectColor or Color3.new()
+	elems.ScrollThumb.BackgroundColor3 = self.ThumbColor
+	self.Gui.BackgroundColor3 = data.FrameColor or Color3.new()
+	elems.Button1.BackgroundColor3 = data.ButtonColor or Color3.new()
+	elems.Button2.BackgroundColor3 = data.ButtonColor or Color3.new()
+
+	local arrowColor = data.ArrowColor or Color3.new()
+	for _, line in elems.Arrow1Lines do
+		line.BackgroundColor3 = arrowColor
 	end
-	for i, v in pairs(self.GuiElems.Button2.Arrow:GetChildren()) do
-		v.BackgroundColor3 = data.ArrowColor or Color3.new(0, 0, 0)
+	for _, line in elems.Arrow2Lines do
+		line.BackgroundColor3 = arrowColor
 	end
 end
 
-funcs.SetScrollFrame = function(self, frame)
-	if self.ScrollUpEvent then
-		self.ScrollUpEvent:Disconnect()
-		self.ScrollUpEvent = nil
-	end
-	if self.ScrollDownEvent then
-		self.ScrollDownEvent:Disconnect()
-		self.ScrollDownEvent = nil
-	end
+-- Lets another frame scroll this bar with the mouse wheel
+function methods.SetScrollFrame(self, frame)
+	if self.ScrollUpEvent then self.ScrollUpEvent:Disconnect() end
+	if self.ScrollDownEvent then self.ScrollDownEvent:Disconnect() end
+
 	self.ScrollUpEvent = frame.MouseWheelForward:Connect(function() self:ScrollTo(self.Index - self.WheelIncrement) end)
 	self.ScrollDownEvent = frame.MouseWheelBackward:Connect(function() self:ScrollTo(self.Index + self.WheelIncrement) end)
 end
 
-local mt = {}
-mt.__index = funcs
+local metatable = { __index = methods }
 
-local function new(hor)
-	local obj = setmetatable({
+local function new(isHorizontal)	
+local self = (setmetatable({
 		Index = 0,
 		VisibleSpace = 0,
 		TotalSpace = 0,
 		Increment = 1,
 		WheelIncrement = 1,
-		Markers = {},
 		GuiElems = {},
-		Horizontal = hor,
-		LastTotalSpace = 0,
+		Horizontal = isHorizontal == true,
 		Scrolled = Lib.Signal.new(),
-	}, mt)
-	obj.Gui = createFrame(obj)
-	obj:Texture({
-		ThumbColor = Color3.fromRGB(60, 60, 60),
-		ThumbSelectColor = Color3.fromRGB(75, 75, 75),
-		ArrowColor = Color3.new(1, 1, 1),
-		FrameColor = Color3.fromRGB(40, 40, 40),
-		ButtonColor = Color3.fromRGB(75, 75, 75),
+	}, metatable) )
+	
+self.Gui = createFrame(self)
+	self:Texture({
+		ThumbColor = THUMB_COLOR,
+		ThumbSelectColor = THUMB_SELECT_COLOR,
+		ArrowColor = ARROW_COLOR,
+		FrameColor = FRAME_COLOR,
+		ButtonColor = BUTTON_COLOR,
 	})
-	return obj
+
+	return self
 end
 
 return { new = new }
-end function __DARKDEX_MODULES.u()local v=__DARKDEX_MODULES.cache.u if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.u=v end return v.c end end do local function __modImpl()
+end function __DARKDEX_MODULES.x()local v=__DARKDEX_MODULES.cache.x if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.x=v end return v.c end end do local function __modImpl()
 local Context = __DARKDEX_MODULES.a()
 local Create = __DARKDEX_MODULES.e()
 
@@ -7493,7 +8212,6 @@ local Main = Context.Main
 local Lib = Context.Lib
 local service = Context.service
 local plr = Context.plr
-local cloneref = Context.cloneref
 local create = Create.create
 
 local funcs = {}
@@ -7872,13 +8590,13 @@ local createGui = function(self)
 
 			local alignInsertPos, alignInsertSide
 
-			guiDragging = true
+			self.Dragging = true
 
-			releaseEvent = cloneref(game:GetService("UserInputService")).InputEnded:Connect(function(input)
+			releaseEvent = service.UserInputService.InputEnded:Connect(function(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton1 then
 					releaseEvent:Disconnect()
 					mouseEvent:Disconnect()
-					guiDragging = false
+					self.Dragging = false
 					alignIndicator.Parent = nil
 					if alignInsertSide then
 						local targetSide = (alignInsertSide == "left" and leftSide) or (alignInsertSide == "right" and rightSide)
@@ -7887,7 +8605,7 @@ local createGui = function(self)
 				end
 			end)
 
-			mouseEvent = cloneref(game:GetService("UserInputService")).InputChanged:Connect(function(input)
+			mouseEvent = service.UserInputService.InputChanged:Connect(function(input)
 				if input.UserInputType == Enum.UserInputType.MouseMovement and self.Draggable and not self.Closed then
 					if self.Aligned then
 						if leftSide.Resizing or rightSide.Resizing then return end
@@ -8392,7 +9110,7 @@ funcs.Close = function(self)
 		self:StopTweens()
 		local ti = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
-		local closeTime = tick()
+		local closeTime = os.clock()
 		self.LastClose = closeTime
 
 		self:DoTween(self.GuiElems.Main, ti, { Size = UDim2.new(0, self.SizeX, 0, 20) })
@@ -8446,7 +9164,7 @@ funcs.Show = function(self, data) return static.ShowWindow(self, data) end
 
 funcs.ShowAndFocus = function(self, data)
 	static.ShowWindow(self, data)
-	service.RunService.RenderStepped:wait()
+	service.RunService.RenderStepped:Wait()
 	self:Focus()
 end
 
@@ -8467,7 +9185,7 @@ static.ShowWindow = function(window, data)
 	end
 
 	window.Closed = false
-	window.LastClose = tick()
+	window.LastClose = os.clock()
 	window.GuiElems.Title.TextTransparency = 0
 	window.GuiElems.Minimize.ImageLabel.ImageTransparency = 0
 	window.GuiElems.Close.ImageLabel.ImageTransparency = 0
@@ -8608,13 +9326,15 @@ static.Init = function()
 
 	alignIndicator = Instance.new("ScreenGui")
 	alignIndicator.DisplayOrder = Main.DisplayOrders.Core
-	local indicator = Instance.new("Frame", alignIndicator)
+	local indicator = Instance.new("Frame")
 	indicator.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
 	indicator.BorderSizePixel = 0
 	indicator.BackgroundTransparency = 0.8
 	indicator.Name = "Indicator"
-	local corner = Instance.new("UICorner", indicator)
+	local corner = Instance.new("UICorner")
 	corner.CornerRadius = UDim.new(0, 10)
+	corner.Parent = indicator
+	indicator.Parent = alignIndicator
 
 	local leftToggle = create({
 		{
@@ -8694,7 +9414,7 @@ static.new = function()
 end
 
 return static
-end function __DARKDEX_MODULES.v()local v=__DARKDEX_MODULES.cache.v if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.v=v end return v.c end end do local function __modImpl()
+end function __DARKDEX_MODULES.y()local v=__DARKDEX_MODULES.cache.y if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.y=v end return v.c end end do local function __modImpl()
 local Context = __DARKDEX_MODULES.a()
 local Create = __DARKDEX_MODULES.e()
 
@@ -9115,10 +9835,7 @@ funcs.Show = function(self, x, y)
 	self.CloseEvent = service.UserInputService.InputBegan:Connect(function(input)
 		if not closable or input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
 
-		if not Lib.CheckMouseInGui(elems.Main) then
-			self.CloseEvent:Disconnect()
-			self:Hide()
-		end
+		if not Lib.CheckMouseInGui(elems.Main) then self:Hide() end
 	end)
 
 	-- Resize
@@ -9137,7 +9854,13 @@ funcs.Show = function(self, x, y)
 	closable = true
 end
 
-funcs.Hide = function(self) self.Gui.Parent = nil end
+funcs.Hide = function(self)
+	if self.CloseEvent then
+		self.CloseEvent:Disconnect()
+		self.CloseEvent = nil
+	end
+	self.Gui.Parent = nil
+end
 
 funcs.ApplyTheme = function(self, data)
 	local theme = self.Theme
@@ -9176,7 +9899,7 @@ local function new()
 end
 
 return { new = new }
-end function __DARKDEX_MODULES.w()local v=__DARKDEX_MODULES.cache.w if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.w=v end return v.c end end do local function __modImpl()
+end function __DARKDEX_MODULES.z()local v=__DARKDEX_MODULES.cache.z if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.z=v end return v.c end end do local function __modImpl()
 local Context = __DARKDEX_MODULES.a()
 local Create = __DARKDEX_MODULES.e()
 
@@ -9185,7 +9908,7 @@ local Settings = Context.Settings
 local env = Context.env
 local service = Context.service
 local plr = Context.plr
-local cloneref = Context.cloneref
+
 local create = Create.create
 
 local funcs = {}
@@ -9342,14 +10065,13 @@ local tabJumps = {
 }
 
 local tweenService = service.TweenService
-local lineTweens = {}
 
 local function initBuiltIn()
 	local env = getfenv()
 	local type = type
 	local tostring = tostring
 	for name, _ in next, builtIns do
-		local envaVl = env[name]
+		local envVal = env[name]
 		if type(envVal) == "table" then
 			local items = {}
 			for i, v in next, envVal do
@@ -9466,7 +10188,7 @@ local function setupMouseSelection(obj)
 				end
 			end)
 
-			scrollEvent = cloneref(game:GetService("RunService")).RenderStepped:Connect(function()
+			scrollEvent = service.RunService.RenderStepped:Connect(function()
 				if scrollPowerV ~= 0 or scrollPowerH ~= 0 then
 					obj:ScrollDelta(scrollPowerH, scrollPowerV)
 					updateSelection()
@@ -9513,8 +10235,11 @@ local function makeFrame(obj)
 	editBox.Visible = false
 	editBox.Parent = frame
 
-	lineTweens.Invis = tweenService:Create(cursor, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), { BackgroundTransparency = 1 })
-	lineTweens.Vis = tweenService:Create(cursor, TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), { BackgroundTransparency = 0 })
+	-- Per editor: a shared table made every editor blink the last created cursor
+	obj.CursorTweens = {
+		Invis = tweenService:Create(cursor, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), { BackgroundTransparency = 1 }),
+		Vis = tweenService:Create(cursor, TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), { BackgroundTransparency = 0 }),
+	}
 
 	elems.LinesFrame = linesFrame
 	elems.LineNumbersLabel = lineNumbersLabel
@@ -9549,16 +10274,13 @@ funcs.GetSelectionText = function(self)
 
 	if deltaLines == 0 then return self:ConvertText(lines[selY + 1]:sub(selX + 1, sel2X), false) end
 
-	local leftSub = lines[selY + 1]:sub(selX + 1)
-	local rightSub = lines[sel2Y + 1]:sub(1, sel2X)
-
-	local result = leftSub .. "\n"
+	local parts = { lines[selY + 1]:sub(selX + 1) }
 	for i = selY + 1, sel2Y - 1 do
-		result = result .. lines[i + 1] .. "\n"
+		table.insert(parts, lines[i + 1])
 	end
-	result = result .. rightSub
+	table.insert(parts, lines[sel2Y + 1]:sub(1, sel2X))
 
-	return self:ConvertText(result, false)
+	return self:ConvertText(table.concat(parts, "\n"), false)
 end
 
 funcs.SetCopyableSelection = function(self)
@@ -9690,7 +10412,7 @@ funcs.ConnectEditBoxEvent = function(self)
 				self:ResetSelection(true)
 				self:JumpToCursor()
 			end)
-		elseif service.UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+		elseif Lib.IsCtrlDown() then
 			if keycode == keycodes.A then
 				self.SelectionRange = { { 0, 0 }, { #self.Lines[#self.Lines], #self.Lines - 1 } }
 				self:SetCopyableSelection()
@@ -9820,26 +10542,28 @@ end
 
 funcs.CursorAnim = function(self, on)
 	local cursor = self.GuiElems.Cursor
-	local animTime = tick()
-	self.LastAnimTime = animTime
+	local tweens = self.CursorTweens
+	local animId = (self.CursorAnimId or 0) + 1
+	self.CursorAnimId = animId
 
 	if not on then return end
 
-	lineTweens.Invis:Cancel()
-	lineTweens.Vis:Cancel()
+	tweens.Invis:Cancel()
+	tweens.Vis:Cancel()
 	cursor.BackgroundTransparency = 0
 
-	coroutine.wrap(function()
-		while self.Editable do
-			Lib.FastWait(0.5)
-			if self.LastAnimTime ~= animTime then return end
-			lineTweens.Invis:Play()
-			Lib.FastWait(0.4)
-			if self.LastAnimTime ~= animTime then return end
-			lineTweens.Vis:Play()
-			Lib.FastWait(0.2)
+	-- A newer call replaces this loop by changing CursorAnimId
+	task.spawn(function()
+		while self.Editable and cursor.Parent do
+			task.wait(0.5)
+			if self.CursorAnimId ~= animId then return end
+			tweens.Invis:Play()
+			task.wait(0.4)
+			if self.CursorAnimId ~= animId then return end
+			tweens.Vis:Play()
+			task.wait(0.2)
 		end
-	end)()
+	end)
 end
 
 funcs.MoveCursor = function(self, x, y)
@@ -9926,9 +10650,7 @@ funcs.MapNewLines = function(self)
 end
 
 funcs.PreHighlight = function(self)
-	local start = tick()
 	local text = self.Text:gsub("\\\\", "  ")
-	--print("BACKSLASH SUB",tick()-start)
 	local textLen = #text
 	local found = {}
 	local foundMap = {}
@@ -9951,7 +10673,6 @@ funcs.PreHighlight = function(self)
 			x, y, extra = find(str, pattern, init, raw)
 		end
 	end
-	local start = tick()
 	findAll(text, '"', 1, true)
 	findAll(text, "'", 2, true)
 	findAll(text, "%[(=*)%[", 3)
@@ -10024,8 +10745,6 @@ funcs.PreHighlight = function(self)
 		--if i < 200 then print(curLine) end
 	end
 	self.PreHighlights = foundHighlights
-	--print(tick()-start)
-	--print(#found,curLine)
 end
 
 funcs.HighlightLine = function(self, line)
@@ -10159,8 +10878,6 @@ funcs.HighlightLine = function(self, line)
 end
 
 funcs.Refresh = function(self)
-	local start = tick()
-
 	local linesFrame = self.Frame.Lines
 	local hSize = math.max(0, linesFrame.AbsoluteSize.X)
 	local vSize = math.max(0, linesFrame.AbsoluteSize.Y)
@@ -10282,8 +10999,6 @@ funcs.Refresh = function(self)
 
 	self.Frame.LineNumbers.Text = lineNumberStr
 	self:UpdateCursor()
-
-	--print("REFRESH TIME",tick()-start)
 end
 
 funcs.UpdateView = function(self)
@@ -10353,30 +11068,22 @@ funcs.ProcessTextChange = function(self)
 	--self.TextChanged:Fire()
 end
 
+-- Tabs are shown as tabReplacement in the editor so the cursor can step over them
 funcs.ConvertText = function(self, text, toEditor)
-	if toEditor then
-		return text:gsub("\t", (" %s%s "):format(tabSub, tabSub))
-	else
-		return text:gsub((" %s%s "):format(tabSub, tabSub), "\t")
-	end
+	if toEditor then return (string.gsub(text, "\t", tabReplacement)) end
+	return (string.gsub(text, tabReplacement, "\t"))
 end
 
-funcs.GetText = function(self) -- TODO: better (use new tab format)
-	local source = table.concat(self.Lines, "\n")
-	return self:ConvertText(source, false) -- Tab Convert
-end
+funcs.GetText = function(self) return self:ConvertText(table.concat(self.Lines, "\n"), false) end
 
 funcs.SetText = function(self, txt)
-	txt = self:ConvertText(txt, true) -- Tab Convert
-	local lines = self.Lines
-	table.clear(lines)
-	local count = 1
+	txt = string.gsub(txt, "\r\n?", "\n")
+	txt = self:ConvertText(txt, true)
 
-	for line in txt:gmatch("([^\n\r]*)[\n\r]?") do
-		local len = #line
-		lines[count] = line
-		count = count + 1
-	end
+	local lines = self.Lines
+	local split = string.split(txt, "\n")
+	table.clear(lines)
+	table.move(split, 1, #split, 1, lines)
 
 	self:ProcessTextChange()
 end
@@ -10386,7 +11093,7 @@ funcs.MakeRichTemplates = function(self)
 	local templates = {}
 
 	for name, color in pairs(self.Colors) do
-		templates[name] = ('<font color="rgb(%s,%s,%s)">'):format(floor(color.r * 255), floor(color.g * 255), floor(color.b * 255))
+		templates[name] = ('<font color="rgb(%s,%s,%s)">'):format(floor(color.R * 255), floor(color.G * 255), floor(color.B * 255))
 	end
 
 	self.RichTemplates = templates
@@ -10461,7 +11168,7 @@ local function new()
 end
 
 return { new = new }
-end function __DARKDEX_MODULES.x()local v=__DARKDEX_MODULES.cache.x if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.x=v end return v.c end end do local function __modImpl()
+end function __DARKDEX_MODULES.A()local v=__DARKDEX_MODULES.cache.A if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.A=v end return v.c end end do local function __modImpl()
 local Context = __DARKDEX_MODULES.a()
 local Create = __DARKDEX_MODULES.e()
 
@@ -10479,7 +11186,6 @@ local max = math.max
 local new = Instance.new
 local TweenSize = new("Frame").TweenSize
 local ti = TweenInfo.new
-local delay = delay
 
 local function ripple(object, color)
 	local circle = new("Frame")
@@ -10667,7 +11373,7 @@ funcs.SetState = function(self, val, anim)
 	self.Toggled = val
 
 	if self.OutlineColorTween then self.OutlineColorTween:Cancel() end
-	local setStateTime = tick()
+	local setStateTime = os.clock()
 	self.LastSetStateTime = setStateTime
 
 	if self.Toggled then
@@ -10675,7 +11381,7 @@ funcs.SetState = function(self, val, anim)
 			if anim then
 				self.OutlineColorTween = service.TweenService:Create(self.GuiElems.Outline, ti(4 / 15, Enum.EasingStyle.Circular, Enum.EasingDirection.Out), { BackgroundColor3 = self.Colors.Primary })
 				self.OutlineColorTween:Play()
-				delay(0.15, function()
+				task.delay(0.15, function()
 					if setStateTime ~= self.LastSetStateTime then return end
 					self:Paint()
 					TweenSize(self.GuiElems.Checkmark, ud2o(14, 20), "Out", "Bounce", 2 / 15, true)
@@ -10696,7 +11402,7 @@ funcs.SetState = function(self, val, anim)
 			if anim then
 				self.OutlineColorTween = service.TweenService:Create(self.GuiElems.Outline, ti(4 / 15, Enum.EasingStyle.Circular, Enum.EasingDirection.In), { BackgroundColor3 = self.Colors.Secondary })
 				self.OutlineColorTween:Play()
-				delay(0.15, function()
+				task.delay(0.15, function()
 					if setStateTime ~= self.LastSetStateTime then return end
 					self:Paint()
 					TweenSize(self.GuiElems.Checkmark, ud2o(0, 20), "Out", "Quad", 1 / 15, true)
@@ -10736,24 +11442,8 @@ local function new(style)
 	return obj
 end
 
-local function fromFrame(frame)
-	local obj = setmetatable({
-		Toggled = false,
-		Disabled = false,
-		Colors = {
-			Background = c3(36, 36, 36),
-			Primary = c3(49, 176, 230),
-			Secondary = c3(25, 25, 25),
-			Disabled = c3(64, 64, 64),
-			DisabledBackground = c3(52, 52, 52),
-		},
-	}, mt)
-	initGui(obj, frame)
-	return obj
-end
-
-return { new = new, fromFrame }
-end function __DARKDEX_MODULES.y()local v=__DARKDEX_MODULES.cache.y if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.y=v end return v.c end end do local function __modImpl()
+return { new = new }
+end function __DARKDEX_MODULES.B()local v=__DARKDEX_MODULES.cache.B if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.B=v end return v.c end end do local function __modImpl()
 local Context = __DARKDEX_MODULES.a()
 local Create = __DARKDEX_MODULES.e()
 
@@ -10762,7 +11452,6 @@ local service = Context.service
 local create = Create.create
 
 local funcs = {}
-local paletteCount = 0
 local mouse = service.Players.LocalPlayer:GetMouse()
 local hexStartX = 4
 local hexSizeX = 27
@@ -10859,6 +11548,7 @@ local function createGui(self)
 	})
 	local colorFrame = gui.Frame
 	local hex = colorFrame.Hex
+	local paletteCount = 0
 
 	for row = 1, 13 do
 		local columns = math.min(row, 14 - row) + 6
@@ -10917,10 +11607,7 @@ funcs.Show = function(self, x, y, prevColor)
 	self.CloseEvent = service.UserInputService.InputBegan:Connect(function(input)
 		if not closable or input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
 
-		if not Lib.CheckMouseInGui(self.Gui.Frame) then
-			self.CloseEvent:Disconnect()
-			self:Close()
-		end
+		if not Lib.CheckMouseInGui(self.Gui.Frame) then self:Close() end
 	end)
 
 	if reverseY then
@@ -10935,7 +11622,12 @@ funcs.Show = function(self, x, y, prevColor)
 end
 
 funcs.Close = function(self)
+	if self.CloseEvent then
+		self.CloseEvent:Disconnect()
+		self.CloseEvent = nil
+	end
 	self.Gui.Parent = nil
+
 	self.OnCancel:Fire()
 end
 
@@ -10954,12 +11646,12 @@ local function new()
 end
 
 return { new = new }
-end function __DARKDEX_MODULES.z()local v=__DARKDEX_MODULES.cache.z if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.z=v end return v.c end end do local function __modImpl()
+end function __DARKDEX_MODULES.C()local v=__DARKDEX_MODULES.cache.C if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.C=v end return v.c end end do local function __modImpl()
 local Context = __DARKDEX_MODULES.a()
 local Create = __DARKDEX_MODULES.e()
 
 local Lib = Context.Lib
-local cloneref = Context.cloneref
+local service = Context.service
 local create = Create.create
 
 -- TODO: Convert to newer class model
@@ -11464,8 +12156,8 @@ local function new()
 	local greenInput = pickerFrame.Green.Input
 	local blueInput = pickerFrame.Blue.Input
 
-	local user = cloneref(game:GetService("UserInputService"))
-	local mouse = cloneref(game:GetService("Players")).LocalPlayer:GetMouse()
+	local user = service.UserInputService
+	local mouse = service.Players.LocalPlayer:GetMouse()
 
 	local hue, sat, val = 0, 0, 1
 	local red, green, blue = 1, 1, 1
@@ -11568,7 +12260,7 @@ local function new()
 		sat = (199 - relativeY) / 199
 
 		local hsvColor = Color3.fromHSV(hue, sat, val)
-		red, green, blue = hsvColor.r, hsvColor.g, hsvColor.b
+		red, green, blue = hsvColor.R, hsvColor.G, hsvColor.B
 
 		updateColor()
 	end
@@ -11585,7 +12277,7 @@ local function new()
 		val = (199 - relativeY) / 199
 
 		local hsvColor = Color3.fromHSV(hue, sat, val)
-		red, green, blue = hsvColor.r, hsvColor.g, hsvColor.b
+		red, green, blue = hsvColor.R, hsvColor.G, hsvColor.B
 
 		updateColor()
 	end
@@ -11597,7 +12289,7 @@ local function new()
 			elseif input.UserInputType == Enum.UserInputType.MouseButton1 then
 				local releaseEvent, runEvent
 
-				local startTime = tick()
+				local startTime = os.clock()
 				local pressing = true
 				local startNum = tonumber(frame.Text)
 
@@ -11612,11 +12304,11 @@ local function new()
 				startNum = startNum + 1
 				func(startNum)
 				while pressing do
-					if tick() - startTime > 0.3 then
+					if os.clock() - startTime > 0.3 then
 						startNum = startNum + 1
 						func(startNum)
 					end
-					wait(0.1)
+					task.wait(0.1)
 				end
 			end
 		end)
@@ -11631,7 +12323,7 @@ local function new()
 			elseif input.UserInputType == Enum.UserInputType.MouseButton1 then
 				local releaseEvent, runEvent
 
-				local startTime = tick()
+				local startTime = os.clock()
 				local pressing = true
 				local startNum = tonumber(frame.Text)
 
@@ -11646,11 +12338,11 @@ local function new()
 				startNum = startNum - 1
 				func(startNum)
 				while pressing do
-					if tick() - startTime > 0.3 then
+					if os.clock() - startTime > 0.3 then
 						startNum = startNum - 1
 						func(startNum)
 					end
-					wait(0.1)
+					task.wait(0.1)
 				end
 			end
 		end)
@@ -11701,7 +12393,7 @@ local function new()
 		if num then
 			hue = math.clamp(math.floor(num), 0, 359) / 359
 			local hsvColor = Color3.fromHSV(hue, sat, val)
-			red, green, blue = hsvColor.r, hsvColor.g, hsvColor.b
+			red, green, blue = hsvColor.R, hsvColor.G, hsvColor.B
 			hueInput.Text = tostring(hue * 359)
 			updateColor(1)
 		end
@@ -11714,7 +12406,7 @@ local function new()
 		if num then
 			sat = math.clamp(math.floor(num), 0, 255) / 255
 			local hsvColor = Color3.fromHSV(hue, sat, val)
-			red, green, blue = hsvColor.r, hsvColor.g, hsvColor.b
+			red, green, blue = hsvColor.R, hsvColor.G, hsvColor.B
 			satInput.Text = tostring(sat * 255)
 			updateColor(1)
 		end
@@ -11727,7 +12419,7 @@ local function new()
 		if num then
 			val = math.clamp(math.floor(num), 0, 255) / 255
 			local hsvColor = Color3.fromHSV(hue, sat, val)
-			red, green, blue = hsvColor.r, hsvColor.g, hsvColor.b
+			red, green, blue = hsvColor.R, hsvColor.G, hsvColor.B
 			valInput.Text = tostring(val * 255)
 			updateColor(1)
 		end
@@ -11789,7 +12481,7 @@ local function new()
 		newColor.Position = UDim2.new(0, 1 + 30 * column, 0, 21 + 23 * row)
 
 		newColor.MouseButton1Click:Connect(function()
-			red, green, blue = v.r, v.g, v.b
+			red, green, blue = v.R, v.G, v.B
 			local newColor = Color3.new(red, green, blue)
 			hue, sat, val = Color3.toHSV(newColor)
 			updateColor()
@@ -11813,7 +12505,7 @@ local function new()
 
 		newColor.MouseButton1Click:Connect(function()
 			local curColor = customColors[i] or Color3.new(0, 0, 0)
-			red, green, blue = curColor.r, curColor.g, curColor.b
+			red, green, blue = curColor.R, curColor.G, curColor.B
 			hue, sat, val = Color3.toHSV(curColor)
 			updateColor()
 		end)
@@ -11856,7 +12548,7 @@ local function new()
 	updateColor()
 
 	newMt.SetColor = function(self, color)
-		red, green, blue = color.r, color.g, color.b
+		red, green, blue = color.R, color.G, color.B
 		hue, sat, val = Color3.toHSV(color)
 		updateColor()
 	end
@@ -11867,12 +12559,12 @@ local function new()
 end
 
 return { new = new }
-end function __DARKDEX_MODULES.A()local v=__DARKDEX_MODULES.cache.A if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.A=v end return v.c end end do local function __modImpl()
+end function __DARKDEX_MODULES.D()local v=__DARKDEX_MODULES.cache.D if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.D=v end return v.c end end do local function __modImpl()
 local Context = __DARKDEX_MODULES.a()
 local Create = __DARKDEX_MODULES.e()
 
 local Lib = Context.Lib
-local cloneref = Context.cloneref
+local service = Context.service
 local create = Create.create
 
 local function new() -- TODO: Convert to newer class model
@@ -12136,8 +12828,8 @@ local function new() -- TODO: Convert to newer class model
 	local currentPoint = nil
 	local resetSequence = nil
 
-	local user = cloneref(game:GetService("UserInputService"))
-	local mouse = cloneref(game:GetService("Players")).LocalPlayer:GetMouse()
+	local user = service.UserInputService
+	local mouse = service.Players.LocalPlayer:GetMouse()
 
 	for i = 2, 10 do
 		local newLine = Instance.new("Frame")
@@ -12194,13 +12886,14 @@ local function new() -- TODO: Convert to newer class model
 	envelopeDrag.Size = UDim2.new(0, 7, 0, 20)
 	envelopeDrag.Visible = false
 	envelopeDrag.ZIndex = 2
-	local envelopeDragLine = Instance.new("Frame", envelopeDrag)
+	local envelopeDragLine = Instance.new("Frame")
 	envelopeDragLine.Name = "Line"
 	envelopeDragLine.BackgroundColor3 = Color3.new(0, 0, 0)
 	envelopeDragLine.BorderSizePixel = 0
 	envelopeDragLine.Position = UDim2.new(0, 3, 0, 0)
 	envelopeDragLine.Size = UDim2.new(0, 1, 0, 20)
 	envelopeDragLine.ZIndex = 2
+	envelopeDragLine.Parent = envelopeDrag
 
 	local envelopeDragTop, envelopeDragBottom = envelopeDrag:Clone(), envelopeDrag:Clone()
 	envelopeDragTop.Parent = numberLine
@@ -12558,12 +13251,12 @@ local function new() -- TODO: Convert to newer class model
 end
 
 return { new = new }
-end function __DARKDEX_MODULES.B()local v=__DARKDEX_MODULES.cache.B if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.B=v end return v.c end end do local function __modImpl()
+end function __DARKDEX_MODULES.E()local v=__DARKDEX_MODULES.cache.E if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.E=v end return v.c end end do local function __modImpl()
 local Context = __DARKDEX_MODULES.a()
 local Create = __DARKDEX_MODULES.e()
 
 local Lib = Context.Lib
-local cloneref = Context.cloneref
+local service = Context.service
 local create = Create.create
 
 -- TODO: Convert to newer class model
@@ -12744,8 +13437,8 @@ local function new()
 	local closeButton = pickerFrame.Close
 	local topClose = pickerTopBar.Close
 
-	local user = cloneref(game:GetService("UserInputService"))
-	local mouse = cloneref(game:GetService("Players")).LocalPlayer:GetMouse()
+	local user = service.UserInputService
+	local mouse = service.Players.LocalPlayer:GetMouse()
 
 	local colors = { { Color3.new(1, 0, 1), 0 }, { Color3.new(0.2, 0.9, 0.2), 0.2 }, { Color3.new(0.4, 0.5, 0.9), 0.7 }, { Color3.new(0.6, 1, 1), 1 } }
 	local resetSequence = nil
@@ -13000,7 +13693,7 @@ local function new()
 end
 
 return { new = new }
-end function __DARKDEX_MODULES.C()local v=__DARKDEX_MODULES.cache.C if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.C=v end return v.c end end do local function __modImpl()--[[
+end function __DARKDEX_MODULES.F()local v=__DARKDEX_MODULES.cache.F if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.F=v end return v.c end end do local function __modImpl()--[[
 	Helpers for the component classes.
 
 	A component declares its default properties in a table. initObj deep-copies it
@@ -13055,17 +13748,18 @@ function Class.getGuiMT(props, funcs)
 end
 
 return Class
-end function __DARKDEX_MODULES.D()local v=__DARKDEX_MODULES.cache.D if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.D=v end return v.c end end do local function __modImpl()
-local Class = __DARKDEX_MODULES.D()
+end function __DARKDEX_MODULES.G()local v=__DARKDEX_MODULES.cache.G if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.G=v end return v.c end end do local function __modImpl()
+local Class = __DARKDEX_MODULES.G()
 local Context = __DARKDEX_MODULES.a()
 
 local Settings = Context.Settings
-local cloneref = Context.cloneref
+local service = Context.service
+
 local initObj = Class.initObj
 local getGuiMT = Class.getGuiMT
 local PH = Class.PH
 
-local textService = cloneref(game:GetService("TextService"))
+local textService = service.TextService
 
 local props = {
 	OffsetX = 0,
@@ -13134,13 +13828,14 @@ local function convert(textbox)
 	obj.View = view
 	obj.Gui = view
 
-	textbox.Changed:Connect(function(prop)
-		if prop == "Text" or prop == "CursorPosition" or prop == "AbsoluteSize" then
-			local cursorPos = obj.TextBox.CursorPosition
-			if cursorPos ~= -1 then obj.CursorPos = cursorPos end
-			obj:Update()
-		end
-	end)
+	local function onChanged()
+		local cursorPos = textbox.CursorPosition
+		if cursorPos ~= -1 then obj.CursorPos = cursorPos end
+		obj:Update()
+	end
+	textbox:GetPropertyChangedSignal("Text"):Connect(onChanged)
+	textbox:GetPropertyChangedSignal("CursorPosition"):Connect(onChanged)
+	textbox:GetPropertyChangedSignal("AbsoluteSize"):Connect(onChanged)
 
 	obj:Update()
 
@@ -13164,8 +13859,8 @@ local function new()
 end
 
 return { new = new, convert = convert }
-end function __DARKDEX_MODULES.E()local v=__DARKDEX_MODULES.cache.E if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.E=v end return v.c end end do local function __modImpl()
-local Class = __DARKDEX_MODULES.D()
+end function __DARKDEX_MODULES.H()local v=__DARKDEX_MODULES.cache.H if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.H=v end return v.c end end do local function __modImpl()
+local Class = __DARKDEX_MODULES.G()
 local Context = __DARKDEX_MODULES.a()
 
 local Settings = Context.Settings
@@ -13192,8 +13887,8 @@ local function new()
 end
 
 return { new = new }
-end function __DARKDEX_MODULES.F()local v=__DARKDEX_MODULES.cache.F if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.F=v end return v.c end end do local function __modImpl()
-local Class = __DARKDEX_MODULES.D()
+end function __DARKDEX_MODULES.I()local v=__DARKDEX_MODULES.cache.I if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.I=v end return v.c end end do local function __modImpl()
+local Class = __DARKDEX_MODULES.G()
 local Context = __DARKDEX_MODULES.a()
 
 local Settings = Context.Settings
@@ -13216,8 +13911,8 @@ local function new()
 end
 
 return { new = new }
-end function __DARKDEX_MODULES.G()local v=__DARKDEX_MODULES.cache.G if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.G=v end return v.c end end do local function __modImpl()
-local Class = __DARKDEX_MODULES.D()
+end function __DARKDEX_MODULES.J()local v=__DARKDEX_MODULES.cache.J if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.J=v end return v.c end end do local function __modImpl()
+local Class = __DARKDEX_MODULES.G()
 local Context = __DARKDEX_MODULES.a()
 
 local Lib = Context.Lib
@@ -13284,8 +13979,8 @@ local function new()
 end
 
 return { new = new }
-end function __DARKDEX_MODULES.H()local v=__DARKDEX_MODULES.cache.H if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.H=v end return v.c end end do local function __modImpl()
-local Class = __DARKDEX_MODULES.D()
+end function __DARKDEX_MODULES.K()local v=__DARKDEX_MODULES.cache.K if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.K=v end return v.c end end do local function __modImpl()
+local Class = __DARKDEX_MODULES.G()
 local Context = __DARKDEX_MODULES.a()
 local Create = __DARKDEX_MODULES.e()
 
@@ -13408,8 +14103,8 @@ local function new()
 end
 
 return { new = new }
-end function __DARKDEX_MODULES.I()local v=__DARKDEX_MODULES.cache.I if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.I=v end return v.c end end do local function __modImpl()
-local Class = __DARKDEX_MODULES.D()
+end function __DARKDEX_MODULES.L()local v=__DARKDEX_MODULES.cache.L if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.L=v end return v.c end end do local function __modImpl()
+local Class = __DARKDEX_MODULES.G()
 local Context = __DARKDEX_MODULES.a()
 
 local Lib = Context.Lib
@@ -13432,22 +14127,16 @@ local props = {
 	LastButton = "",
 }
 local funcs = {}
-local tostring = tostring
-
-local disconnect = function(con)
-	local pos = table.find(con.Signal.Connections, con)
-	if pos then table.remove(con.Signal.Connections, pos) end
-end
 
 funcs.Trigger = function(self, item, button)
 	if table.find(self.AllowedButtons, button) then
-		if self.LastButton ~= button or self.LastItem ~= item or self.Combo == self.MaxCombo or tick() - self.ClickId > self.ComboTime then
+		if self.LastButton ~= button or self.LastItem ~= item or self.Combo == self.MaxCombo or os.clock() - self.ClickId > self.ComboTime then
 			self.Combo = 0
 			self.LastButton = button
 			self.LastItem = item
 		end
 		self.Combo = self.Combo + 1
-		self.ClickId = tick()
+		self.ClickId = os.clock()
 
 		local release
 		release = service.UserInputService.InputEnded:Connect(function(input)
@@ -13492,7 +14181,7 @@ local function new()
 end
 
 return { new = new }
-end function __DARKDEX_MODULES.J()local v=__DARKDEX_MODULES.cache.J if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.J=v end return v.c end end do local function __modImpl()--[[
+end function __DARKDEX_MODULES.M()local v=__DARKDEX_MODULES.cache.M if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.M=v end return v.c end end do local function __modImpl()--[[
 	Lib: shared helpers and UI component classes.
 
 	Components are required inside Main (not at load time) because some of them read
@@ -13727,30 +14416,30 @@ function LibModule.Main()
 	installHelpers()
 
 	-- Order matters: later components use the earlier ones while being created
-	Lib.Signal = __DARKDEX_MODULES.r()
-	Lib.Set = __DARKDEX_MODULES.s()
-	Lib.IconMap = __DARKDEX_MODULES.t()
-	Lib.ScrollBar = __DARKDEX_MODULES.u()
-	Lib.Window = __DARKDEX_MODULES.v()
-	Lib.ContextMenu = __DARKDEX_MODULES.w()
-	Lib.CodeFrame = __DARKDEX_MODULES.x()
-	Lib.Checkbox = __DARKDEX_MODULES.y()
-	Lib.BrickColorPicker = __DARKDEX_MODULES.z()
-	Lib.ColorPicker = __DARKDEX_MODULES.A()
-	Lib.NumberSequenceEditor = __DARKDEX_MODULES.B()
-	Lib.ColorSequenceEditor = __DARKDEX_MODULES.C()
-	Lib.ViewportTextBox = __DARKDEX_MODULES.E()
-	Lib.Label = __DARKDEX_MODULES.F()
-	Lib.Frame = __DARKDEX_MODULES.G()
-	Lib.Button = __DARKDEX_MODULES.H()
-	Lib.DropDown = __DARKDEX_MODULES.I()
-	Lib.ClickSystem = __DARKDEX_MODULES.J()
+	Lib.Signal = __DARKDEX_MODULES.u()
+	Lib.Set = __DARKDEX_MODULES.v()
+	Lib.IconMap = __DARKDEX_MODULES.w()
+	Lib.ScrollBar = __DARKDEX_MODULES.x()
+	Lib.Window = __DARKDEX_MODULES.y()
+	Lib.ContextMenu = __DARKDEX_MODULES.z()
+	Lib.CodeFrame = __DARKDEX_MODULES.A()
+	Lib.Checkbox = __DARKDEX_MODULES.B()
+	Lib.BrickColorPicker = __DARKDEX_MODULES.C()
+	Lib.ColorPicker = __DARKDEX_MODULES.D()
+	Lib.NumberSequenceEditor = __DARKDEX_MODULES.E()
+	Lib.ColorSequenceEditor = __DARKDEX_MODULES.F()
+	Lib.ViewportTextBox = __DARKDEX_MODULES.H()
+	Lib.Label = __DARKDEX_MODULES.I()
+	Lib.Frame = __DARKDEX_MODULES.J()
+	Lib.Button = __DARKDEX_MODULES.K()
+	Lib.DropDown = __DARKDEX_MODULES.L()
+	Lib.ClickSystem = __DARKDEX_MODULES.M()
 
 	return Lib
 end
 
 return LibModule
-end function __DARKDEX_MODULES.K()local v=__DARKDEX_MODULES.cache.K if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.K=v end return v.c end end do local function __modImpl()--[[
+end function __DARKDEX_MODULES.N()local v=__DARKDEX_MODULES.cache.N if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.N=v end return v.c end end do local function __modImpl()--[[
 	Startup and shutdown of DarkDex.
 
 	Init loads the library, the reflection data and the apps, then builds the main
@@ -13776,11 +14465,11 @@ local plr = Context.plr
 
 local FOLDERS = { "dex", "dex/assets", "dex/saved", "dex/plugins", "dex/ModuleCache" }
 local APP_MODULES = {
-	{ Name = "Explorer", Module = __DARKDEX_MODULES.o() },
-	{ Name = "Properties", Module = __DARKDEX_MODULES.p() },
-	{ Name = "ScriptViewer", Module = __DARKDEX_MODULES.q() },
+	{ Name = "Explorer", Module = __DARKDEX_MODULES.r() },
+	{ Name = "Properties", Module = __DARKDEX_MODULES.s() },
+	{ Name = "ScriptViewer", Module = __DARKDEX_MODULES.t() },
 }
-local LibModule = __DARKDEX_MODULES.K()
+local LibModule = __DARKDEX_MODULES.N()
 
 Main.Version = "1.0.0"
 Main.Elevated = false
@@ -13796,16 +14485,19 @@ Main.DisplayOrders = {
 }
 
 local trackedConnections= {}
-local shownGuis= {}
-
+-- Weak keys: guis destroyed while running must not be kept alive by this set
+local shownGuis= (setmetatable({}, { __mode = "k" }) )
 -- Keeps a connection to a global signal so Destroy can disconnect it
+
 function Main.Track(connection)	
 table.insert(trackedConnections, connection)
 	return connection
 end
 
 function Main.ShowGui(gui)
-	table.insert(shownGuis, gui)
+	-- Called on every window update, so only the first call protects and parents the gui
+	if shownGuis[gui] and gui.Parent then return end
+	shownGuis[gui] = true
 
 	if env.gethui then
 		gui.Parent = env.gethui()
@@ -13829,7 +14521,7 @@ function Main.Destroy()
 		if type(app) == "table" and app.Destroy then pcall(app.Destroy) end
 	end
 
-	for _, gui in shownGuis do
+	for gui in shownGuis do
 		gui:Destroy()
 	end
 	table.clear(shownGuis)
@@ -13909,7 +14601,7 @@ local function createIcons()
 end
 
 function Main.Init()
-	Main.Elevated = pcall(function() return Context.cloneref(game:GetService("CoreGui")):GetFullName() end)
+	Main.Elevated = pcall(function() return Context.service.CoreGui:GetFullName() end)
 	Main.GuiHolder = Main.Elevated and service.CoreGui or plr:FindFirstChildWhichIsA("PlayerGui")
 
 	Env.init()
@@ -13947,15 +14639,16 @@ function Main.Init()
 end
 
 return Main
-end function __DARKDEX_MODULES.L()local v=__DARKDEX_MODULES.cache.L if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.L=v end return v.c end end end--[[
+end function __DARKDEX_MODULES.O()local v=__DARKDEX_MODULES.cache.O if not v then v={c=__modImpl()}__DARKDEX_MODULES.cache.O=v end return v.c end end end--[[
 	DarkDex
 	Debugging suite for Roblox, based on New Dex by Moon (LorekeeperZinnia).
 	https://github.com/LorekeeperZinnia/Dex
 ]]
 
 
-local Main = __DARKDEX_MODULES.L()
+local Main = __DARKDEX_MODULES.O()
 
+-- selene: allow(global_usage)
 local genv = getgenv and getgenv() or _G
 
 -- Executing again replaces the running instance

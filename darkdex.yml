@@ -1,0 +1,38 @@
+---
+# Alternative executor globals checked by Core/Env and the tools
+name: darkdex
+globals:
+  get_gc_objects:
+    any: true
+  getupvalues:
+    any: true
+  getupvals:
+    any: true
+  getconstants:
+    any: true
+  getconsts:
+    any: true
+  is_l_closure:
+    any: true
+  version:
+    any: true
+  movefileas:
+    any: true
+  getsynasset:
+    any: true
+  dumpstring:
+    any: true
+  get_nil_instances:
+    any: true
+  http:
+    any: true
+  http_request:
+    any: true
+  get_hidden_gui:
+    any: true
+  toclipboard:
+    any: true
+  set_clipboard:
+    any: true
+  Clipboard:
+    any: true

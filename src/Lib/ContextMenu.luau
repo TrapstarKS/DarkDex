@@ -418,10 +418,7 @@ funcs.Show = function(self, x, y)
 	self.CloseEvent = service.UserInputService.InputBegan:Connect(function(input)
 		if not closable or input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
 
-		if not Lib.CheckMouseInGui(elems.Main) then
-			self.CloseEvent:Disconnect()
-			self:Hide()
-		end
+		if not Lib.CheckMouseInGui(elems.Main) then self:Hide() end
 	end)
 
 	-- Resize
@@ -440,7 +437,13 @@ funcs.Show = function(self, x, y)
 	closable = true
 end
 
-funcs.Hide = function(self) self.Gui.Parent = nil end
+funcs.Hide = function(self)
+	if self.CloseEvent then
+		self.CloseEvent:Disconnect()
+		self.CloseEvent = nil
+	end
+	self.Gui.Parent = nil
+end
 
 funcs.ApplyTheme = function(self, data)
 	local theme = self.Theme

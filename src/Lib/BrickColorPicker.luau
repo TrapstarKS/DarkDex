@@ -6,7 +6,6 @@ local service = Context.service
 local create = Create.create
 
 local funcs = {}
-local paletteCount = 0
 local mouse = service.Players.LocalPlayer:GetMouse()
 local hexStartX = 4
 local hexSizeX = 27
@@ -103,6 +102,7 @@ local function createGui(self)
 	})
 	local colorFrame = gui.Frame
 	local hex = colorFrame.Hex
+	local paletteCount = 0
 
 	for row = 1, 13 do
 		local columns = math.min(row, 14 - row) + 6
@@ -161,10 +161,7 @@ funcs.Show = function(self, x, y, prevColor)
 	self.CloseEvent = service.UserInputService.InputBegan:Connect(function(input)
 		if not closable or input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
 
-		if not Lib.CheckMouseInGui(self.Gui.Frame) then
-			self.CloseEvent:Disconnect()
-			self:Close()
-		end
+		if not Lib.CheckMouseInGui(self.Gui.Frame) then self:Close() end
 	end)
 
 	if reverseY then
@@ -179,7 +176,12 @@ funcs.Show = function(self, x, y, prevColor)
 end
 
 funcs.Close = function(self)
+	if self.CloseEvent then
+		self.CloseEvent:Disconnect()
+		self.CloseEvent = nil
+	end
 	self.Gui.Parent = nil
+
 	self.OnCancel:Fire()
 end
 

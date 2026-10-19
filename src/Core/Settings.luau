@@ -32,6 +32,7 @@ local DEFAULT_SETTINGS = {
 		TeleportToOffset = Vector3.zero,
 		ClickToRename = true,
 		AutoUpdateSearch = true,
+		LiveSearch = true, -- search while typing instead of on Enter
 		AutoUpdateMode = 0, -- 0 Default, 1 no tree update, 2 no descendant events, 3 frozen
 		PartSelectionBox = true,
 		GuiSelectionBox = true,

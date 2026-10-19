@@ -2,7 +2,7 @@ local Context = require("@core/Context")
 local Create = require("@core/Create")
 
 local Lib = Context.Lib
-local cloneref = Context.cloneref
+local service = Context.service
 local create = Create.create
 
 -- TODO: Convert to newer class model
@@ -507,8 +507,8 @@ local function new()
 	local greenInput = pickerFrame.Green.Input
 	local blueInput = pickerFrame.Blue.Input
 
-	local user = cloneref(game:GetService("UserInputService"))
-	local mouse = cloneref(game:GetService("Players")).LocalPlayer:GetMouse()
+	local user = service.UserInputService
+	local mouse = service.Players.LocalPlayer:GetMouse()
 
 	local hue, sat, val = 0, 0, 1
 	local red, green, blue = 1, 1, 1
@@ -611,7 +611,7 @@ local function new()
 		sat = (199 - relativeY) / 199
 
 		local hsvColor = Color3.fromHSV(hue, sat, val)
-		red, green, blue = hsvColor.r, hsvColor.g, hsvColor.b
+		red, green, blue = hsvColor.R, hsvColor.G, hsvColor.B
 
 		updateColor()
 	end
@@ -628,7 +628,7 @@ local function new()
 		val = (199 - relativeY) / 199
 
 		local hsvColor = Color3.fromHSV(hue, sat, val)
-		red, green, blue = hsvColor.r, hsvColor.g, hsvColor.b
+		red, green, blue = hsvColor.R, hsvColor.G, hsvColor.B
 
 		updateColor()
 	end
@@ -640,7 +640,7 @@ local function new()
 			elseif input.UserInputType == Enum.UserInputType.MouseButton1 then
 				local releaseEvent, runEvent
 
-				local startTime = tick()
+				local startTime = os.clock()
 				local pressing = true
 				local startNum = tonumber(frame.Text)
 
@@ -655,11 +655,11 @@ local function new()
 				startNum = startNum + 1
 				func(startNum)
 				while pressing do
-					if tick() - startTime > 0.3 then
+					if os.clock() - startTime > 0.3 then
 						startNum = startNum + 1
 						func(startNum)
 					end
-					wait(0.1)
+					task.wait(0.1)
 				end
 			end
 		end)
@@ -674,7 +674,7 @@ local function new()
 			elseif input.UserInputType == Enum.UserInputType.MouseButton1 then
 				local releaseEvent, runEvent
 
-				local startTime = tick()
+				local startTime = os.clock()
 				local pressing = true
 				local startNum = tonumber(frame.Text)
 
@@ -689,11 +689,11 @@ local function new()
 				startNum = startNum - 1
 				func(startNum)
 				while pressing do
-					if tick() - startTime > 0.3 then
+					if os.clock() - startTime > 0.3 then
 						startNum = startNum - 1
 						func(startNum)
 					end
-					wait(0.1)
+					task.wait(0.1)
 				end
 			end
 		end)
@@ -744,7 +744,7 @@ local function new()
 		if num then
 			hue = math.clamp(math.floor(num), 0, 359) / 359
 			local hsvColor = Color3.fromHSV(hue, sat, val)
-			red, green, blue = hsvColor.r, hsvColor.g, hsvColor.b
+			red, green, blue = hsvColor.R, hsvColor.G, hsvColor.B
 			hueInput.Text = tostring(hue * 359)
 			updateColor(1)
 		end
@@ -757,7 +757,7 @@ local function new()
 		if num then
 			sat = math.clamp(math.floor(num), 0, 255) / 255
 			local hsvColor = Color3.fromHSV(hue, sat, val)
-			red, green, blue = hsvColor.r, hsvColor.g, hsvColor.b
+			red, green, blue = hsvColor.R, hsvColor.G, hsvColor.B
 			satInput.Text = tostring(sat * 255)
 			updateColor(1)
 		end
@@ -770,7 +770,7 @@ local function new()
 		if num then
 			val = math.clamp(math.floor(num), 0, 255) / 255
 			local hsvColor = Color3.fromHSV(hue, sat, val)
-			red, green, blue = hsvColor.r, hsvColor.g, hsvColor.b
+			red, green, blue = hsvColor.R, hsvColor.G, hsvColor.B
 			valInput.Text = tostring(val * 255)
 			updateColor(1)
 		end
@@ -832,7 +832,7 @@ local function new()
 		newColor.Position = UDim2.new(0, 1 + 30 * column, 0, 21 + 23 * row)
 
 		newColor.MouseButton1Click:Connect(function()
-			red, green, blue = v.r, v.g, v.b
+			red, green, blue = v.R, v.G, v.B
 			local newColor = Color3.new(red, green, blue)
 			hue, sat, val = Color3.toHSV(newColor)
 			updateColor()
@@ -856,7 +856,7 @@ local function new()
 
 		newColor.MouseButton1Click:Connect(function()
 			local curColor = customColors[i] or Color3.new(0, 0, 0)
-			red, green, blue = curColor.r, curColor.g, curColor.b
+			red, green, blue = curColor.R, curColor.G, curColor.B
 			hue, sat, val = Color3.toHSV(curColor)
 			updateColor()
 		end)
@@ -899,7 +899,7 @@ local function new()
 	updateColor()
 
 	newMt.SetColor = function(self, color)
-		red, green, blue = color.r, color.g, color.b
+		red, green, blue = color.R, color.G, color.B
 		hue, sat, val = Color3.toHSV(color)
 		updateColor()
 	end

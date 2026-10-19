@@ -6,6 +6,7 @@
 
 local Main = require("@core/Main")
 
+-- selene: allow(global_usage)
 local genv = getgenv and getgenv() or _G
 
 -- Executing again replaces the running instance

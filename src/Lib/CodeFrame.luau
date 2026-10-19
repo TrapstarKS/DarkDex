@@ -6,7 +6,7 @@ local Settings = Context.Settings
 local env = Context.env
 local service = Context.service
 local plr = Context.plr
-local cloneref = Context.cloneref
+
 local create = Create.create
 
 local funcs = {}
@@ -163,14 +163,13 @@ local tabJumps = {
 }
 
 local tweenService = service.TweenService
-local lineTweens = {}
 
 local function initBuiltIn()
 	local env = getfenv()
 	local type = type
 	local tostring = tostring
 	for name, _ in next, builtIns do
-		local envaVl = env[name]
+		local envVal = env[name]
 		if type(envVal) == "table" then
 			local items = {}
 			for i, v in next, envVal do
@@ -287,7 +286,7 @@ local function setupMouseSelection(obj)
 				end
 			end)
 
-			scrollEvent = cloneref(game:GetService("RunService")).RenderStepped:Connect(function()
+			scrollEvent = service.RunService.RenderStepped:Connect(function()
 				if scrollPowerV ~= 0 or scrollPowerH ~= 0 then
 					obj:ScrollDelta(scrollPowerH, scrollPowerV)
 					updateSelection()
@@ -334,8 +333,11 @@ local function makeFrame(obj)
 	editBox.Visible = false
 	editBox.Parent = frame
 
-	lineTweens.Invis = tweenService:Create(cursor, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), { BackgroundTransparency = 1 })
-	lineTweens.Vis = tweenService:Create(cursor, TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), { BackgroundTransparency = 0 })
+	-- Per editor: a shared table made every editor blink the last created cursor
+	obj.CursorTweens = {
+		Invis = tweenService:Create(cursor, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), { BackgroundTransparency = 1 }),
+		Vis = tweenService:Create(cursor, TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), { BackgroundTransparency = 0 }),
+	}
 
 	elems.LinesFrame = linesFrame
 	elems.LineNumbersLabel = lineNumbersLabel
@@ -370,16 +372,13 @@ funcs.GetSelectionText = function(self)
 
 	if deltaLines == 0 then return self:ConvertText(lines[selY + 1]:sub(selX + 1, sel2X), false) end
 
-	local leftSub = lines[selY + 1]:sub(selX + 1)
-	local rightSub = lines[sel2Y + 1]:sub(1, sel2X)
-
-	local result = leftSub .. "\n"
+	local parts = { lines[selY + 1]:sub(selX + 1) }
 	for i = selY + 1, sel2Y - 1 do
-		result = result .. lines[i + 1] .. "\n"
+		table.insert(parts, lines[i + 1])
 	end
-	result = result .. rightSub
+	table.insert(parts, lines[sel2Y + 1]:sub(1, sel2X))
 
-	return self:ConvertText(result, false)
+	return self:ConvertText(table.concat(parts, "\n"), false)
 end
 
 funcs.SetCopyableSelection = function(self)
@@ -511,7 +510,7 @@ funcs.ConnectEditBoxEvent = function(self)
 				self:ResetSelection(true)
 				self:JumpToCursor()
 			end)
-		elseif service.UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+		elseif Lib.IsCtrlDown() then
 			if keycode == keycodes.A then
 				self.SelectionRange = { { 0, 0 }, { #self.Lines[#self.Lines], #self.Lines - 1 } }
 				self:SetCopyableSelection()
@@ -641,26 +640,28 @@ end
 
 funcs.CursorAnim = function(self, on)
 	local cursor = self.GuiElems.Cursor
-	local animTime = tick()
-	self.LastAnimTime = animTime
+	local tweens = self.CursorTweens
+	local animId = (self.CursorAnimId or 0) + 1
+	self.CursorAnimId = animId
 
 	if not on then return end
 
-	lineTweens.Invis:Cancel()
-	lineTweens.Vis:Cancel()
+	tweens.Invis:Cancel()
+	tweens.Vis:Cancel()
 	cursor.BackgroundTransparency = 0
 
-	coroutine.wrap(function()
-		while self.Editable do
-			Lib.FastWait(0.5)
-			if self.LastAnimTime ~= animTime then return end
-			lineTweens.Invis:Play()
-			Lib.FastWait(0.4)
-			if self.LastAnimTime ~= animTime then return end
-			lineTweens.Vis:Play()
-			Lib.FastWait(0.2)
+	-- A newer call replaces this loop by changing CursorAnimId
+	task.spawn(function()
+		while self.Editable and cursor.Parent do
+			task.wait(0.5)
+			if self.CursorAnimId ~= animId then return end
+			tweens.Invis:Play()
+			task.wait(0.4)
+			if self.CursorAnimId ~= animId then return end
+			tweens.Vis:Play()
+			task.wait(0.2)
 		end
-	end)()
+	end)
 end
 
 funcs.MoveCursor = function(self, x, y)
@@ -747,9 +748,7 @@ funcs.MapNewLines = function(self)
 end
 
 funcs.PreHighlight = function(self)
-	local start = tick()
 	local text = self.Text:gsub("\\\\", "  ")
-	--print("BACKSLASH SUB",tick()-start)
 	local textLen = #text
 	local found = {}
 	local foundMap = {}
@@ -772,7 +771,6 @@ funcs.PreHighlight = function(self)
 			x, y, extra = find(str, pattern, init, raw)
 		end
 	end
-	local start = tick()
 	findAll(text, '"', 1, true)
 	findAll(text, "'", 2, true)
 	findAll(text, "%[(=*)%[", 3)
@@ -845,8 +843,6 @@ funcs.PreHighlight = function(self)
 		--if i < 200 then print(curLine) end
 	end
 	self.PreHighlights = foundHighlights
-	--print(tick()-start)
-	--print(#found,curLine)
 end
 
 funcs.HighlightLine = function(self, line)
@@ -980,8 +976,6 @@ funcs.HighlightLine = function(self, line)
 end
 
 funcs.Refresh = function(self)
-	local start = tick()
-
 	local linesFrame = self.Frame.Lines
 	local hSize = math.max(0, linesFrame.AbsoluteSize.X)
 	local vSize = math.max(0, linesFrame.AbsoluteSize.Y)
@@ -1103,8 +1097,6 @@ funcs.Refresh = function(self)
 
 	self.Frame.LineNumbers.Text = lineNumberStr
 	self:UpdateCursor()
-
-	--print("REFRESH TIME",tick()-start)
 end
 
 funcs.UpdateView = function(self)
@@ -1174,30 +1166,22 @@ funcs.ProcessTextChange = function(self)
 	--self.TextChanged:Fire()
 end
 
+-- Tabs are shown as tabReplacement in the editor so the cursor can step over them
 funcs.ConvertText = function(self, text, toEditor)
-	if toEditor then
-		return text:gsub("\t", (" %s%s "):format(tabSub, tabSub))
-	else
-		return text:gsub((" %s%s "):format(tabSub, tabSub), "\t")
-	end
+	if toEditor then return (string.gsub(text, "\t", tabReplacement)) end
+	return (string.gsub(text, tabReplacement, "\t"))
 end
 
-funcs.GetText = function(self) -- TODO: better (use new tab format)
-	local source = table.concat(self.Lines, "\n")
-	return self:ConvertText(source, false) -- Tab Convert
-end
+funcs.GetText = function(self) return self:ConvertText(table.concat(self.Lines, "\n"), false) end
 
 funcs.SetText = function(self, txt)
-	txt = self:ConvertText(txt, true) -- Tab Convert
-	local lines = self.Lines
-	table.clear(lines)
-	local count = 1
+	txt = string.gsub(txt, "\r\n?", "\n")
+	txt = self:ConvertText(txt, true)
 
-	for line in txt:gmatch("([^\n\r]*)[\n\r]?") do
-		local len = #line
-		lines[count] = line
-		count = count + 1
-	end
+	local lines = self.Lines
+	local split = string.split(txt, "\n")
+	table.clear(lines)
+	table.move(split, 1, #split, 1, lines)
 
 	self:ProcessTextChange()
 end
@@ -1207,7 +1191,7 @@ funcs.MakeRichTemplates = function(self)
 	local templates = {}
 
 	for name, color in pairs(self.Colors) do
-		templates[name] = ('<font color="rgb(%s,%s,%s)">'):format(floor(color.r * 255), floor(color.g * 255), floor(color.b * 255))
+		templates[name] = ('<font color="rgb(%s,%s,%s)">'):format(floor(color.R * 255), floor(color.G * 255), floor(color.B * 255))
 	end
 
 	self.RichTemplates = templates

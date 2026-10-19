@@ -2,7 +2,7 @@ local Context = require("@core/Context")
 local Create = require("@core/Create")
 
 local Lib = Context.Lib
-local cloneref = Context.cloneref
+local service = Context.service
 local create = Create.create
 
 local function new() -- TODO: Convert to newer class model
@@ -266,8 +266,8 @@ local function new() -- TODO: Convert to newer class model
 	local currentPoint = nil
 	local resetSequence = nil
 
-	local user = cloneref(game:GetService("UserInputService"))
-	local mouse = cloneref(game:GetService("Players")).LocalPlayer:GetMouse()
+	local user = service.UserInputService
+	local mouse = service.Players.LocalPlayer:GetMouse()
 
 	for i = 2, 10 do
 		local newLine = Instance.new("Frame")
@@ -324,13 +324,14 @@ local function new() -- TODO: Convert to newer class model
 	envelopeDrag.Size = UDim2.new(0, 7, 0, 20)
 	envelopeDrag.Visible = false
 	envelopeDrag.ZIndex = 2
-	local envelopeDragLine = Instance.new("Frame", envelopeDrag)
+	local envelopeDragLine = Instance.new("Frame")
 	envelopeDragLine.Name = "Line"
 	envelopeDragLine.BackgroundColor3 = Color3.new(0, 0, 0)
 	envelopeDragLine.BorderSizePixel = 0
 	envelopeDragLine.Position = UDim2.new(0, 3, 0, 0)
 	envelopeDragLine.Size = UDim2.new(0, 1, 0, 20)
 	envelopeDragLine.ZIndex = 2
+	envelopeDragLine.Parent = envelopeDrag
 
 	local envelopeDragTop, envelopeDragBottom = envelopeDrag:Clone(), envelopeDrag:Clone()
 	envelopeDragTop.Parent = numberLine

@@ -2,12 +2,13 @@ local Class = require("@lib/Class")
 local Context = require("@core/Context")
 
 local Settings = Context.Settings
-local cloneref = Context.cloneref
+local service = Context.service
+
 local initObj = Class.initObj
 local getGuiMT = Class.getGuiMT
 local PH = Class.PH
 
-local textService = cloneref(game:GetService("TextService"))
+local textService = service.TextService
 
 local props = {
 	OffsetX = 0,
@@ -76,13 +77,14 @@ local function convert(textbox)
 	obj.View = view
 	obj.Gui = view
 
-	textbox.Changed:Connect(function(prop)
-		if prop == "Text" or prop == "CursorPosition" or prop == "AbsoluteSize" then
-			local cursorPos = obj.TextBox.CursorPosition
-			if cursorPos ~= -1 then obj.CursorPos = cursorPos end
-			obj:Update()
-		end
-	end)
+	local function onChanged()
+		local cursorPos = textbox.CursorPosition
+		if cursorPos ~= -1 then obj.CursorPos = cursorPos end
+		obj:Update()
+	end
+	textbox:GetPropertyChangedSignal("Text"):Connect(onChanged)
+	textbox:GetPropertyChangedSignal("CursorPosition"):Connect(onChanged)
+	textbox:GetPropertyChangedSignal("AbsoluteSize"):Connect(onChanged)
 
 	obj:Update()
 

@@ -1,3 +1,8 @@
+--[[
+	Scroll bar measured in items: Index is the first visible item, VisibleSpace the
+	number of visible items and TotalSpace the item count. Scrolled fires on changes.
+]]
+
 local Context = require("@core/Context")
 local Create = require("@core/Create")
 
@@ -6,435 +11,336 @@ local service = Context.service
 local plr = Context.plr
 local createSimple = Create.createSimple
 
-local funcs = {}
-local user = service.UserInputService
+local UserInputService = service.UserInputService
 local mouse = plr:GetMouse()
-local checkMouseInGui = Lib.CheckMouseInGui
-local createArrow = Lib.CreateArrow
 
-local function drawThumb(self)
-	local total = self.TotalSpace
-	local visible = self.VisibleSpace
-	local index = self.Index
-	local scrollThumb = self.GuiElems.ScrollThumb
-	local scrollThumbFrame = self.GuiElems.ScrollThumbFrame
+local HOLD_DELAY = 0.3
+local MIN_THUMB_SIZE = 16
+local THUMB_COLOR = Color3.fromRGB(60, 60, 60)
+local THUMB_SELECT_COLOR = Color3.fromRGB(75, 75, 75)
+local FRAME_COLOR = Color3.fromRGB(40, 40, 40)
+local BUTTON_COLOR = Color3.fromRGB(75, 75, 75)
+local ARROW_COLOR = Color3.new(1, 1, 1)
 
-	if not (self:CanScrollUp() or self:CanScrollDown()) then
-		scrollThumb.Visible = false
-	else
-		scrollThumb.Visible = true
-	end
+export type ScrollBar = {
+	Index: number,
+	VisibleSpace: number,
+	TotalSpace: number,
+	Increment: number,
+	WheelIncrement: number,
+	Horizontal: boolean,
+	Scrolled: any,
+	Gui: Frame,
+	GuiElems: { [string]: any },
+	ThumbColor: Color3,
+	ThumbSelectColor: Color3,
+	[any]: any,
+}
 
-	if self.Horizontal then
-		scrollThumb.Size = UDim2.new(visible / total, 0, 1, 0)
-		if scrollThumb.AbsoluteSize.X < 16 then scrollThumb.Size = UDim2.new(0, 16, 1, 0) end
-		local fs = scrollThumbFrame.AbsoluteSize.X
-		local bs = scrollThumb.AbsoluteSize.X
-		scrollThumb.Position = UDim2.new(self:GetScrollPercent() * (fs - bs) / fs, 0, 0, 0)
-	else
-		scrollThumb.Size = UDim2.new(1, 0, visible / total, 0)
-		if scrollThumb.AbsoluteSize.Y < 16 then scrollThumb.Size = UDim2.new(1, 0, 0, 16) end
-		local fs = scrollThumbFrame.AbsoluteSize.Y
-		local bs = scrollThumb.AbsoluteSize.Y
-		scrollThumb.Position = UDim2.new(0, 0, self:GetScrollPercent() * (fs - bs) / fs, 0)
-	end
+local methods = {}
+
+local function isMouseButton1(input: InputObject): boolean return input.UserInputType == Enum.UserInputType.MouseButton1 end
+
+-- Calls onRelease once when the left mouse button is released
+local function onMouseRelease(onRelease: () -> ())
+	local connection
+	connection = UserInputService.InputEnded:Connect(function(input)
+		if not isMouseButton1(input) then return end
+		connection:Disconnect()
+		onRelease()
+	end)
+	return connection
 end
 
-local function createFrame(self)
-	local newFrame = createSimple("Frame", {
-		Style = 0,
-		Active = true,
-		AnchorPoint = Vector2.new(0, 0),
-		BackgroundColor3 = Color3.new(0.35294118523598, 0.35294118523598, 0.35294118523598),
-		BackgroundTransparency = 0,
-		BorderColor3 = Color3.new(0.10588236153126, 0.16470588743687, 0.20784315466881),
-		BorderSizePixel = 0,
-		ClipsDescendants = false,
-		Draggable = false,
-		Position = UDim2.new(1, -16, 0, 0),
-		Rotation = 0,
-		Selectable = false,
-		Size = UDim2.new(0, 16, 1, 0),
-		SizeConstraint = 0,
-		Visible = true,
-		ZIndex = 1,
-		Name = "ScrollBar",
-	})
-	local button1 = nil
-	local button2 = nil
+local function drawThumb(self: ScrollBar)
+	local thumb = self.GuiElems.ScrollThumb
+	local thumbFrame = self.GuiElems.ScrollThumbFrame
+	local total, visible = self.TotalSpace, self.VisibleSpace
 
-	if self.Horizontal then
-		newFrame.Size = UDim2.new(1, 0, 0, 16)
-		button1 = createSimple("ImageButton", {
-			Parent = newFrame,
-			Name = "Left",
-			Size = UDim2.new(0, 16, 0, 16),
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			AutoButtonColor = false,
-		})
-		createArrow(16, 4, "left").Parent = button1
-		button2 = createSimple("ImageButton", {
-			Parent = newFrame,
-			Name = "Right",
-			Position = UDim2.new(1, -16, 0, 0),
-			Size = UDim2.new(0, 16, 0, 16),
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			AutoButtonColor = false,
-		})
-		createArrow(16, 4, "right").Parent = button2
-	else
-		newFrame.Size = UDim2.new(0, 16, 1, 0)
-		button1 = createSimple("ImageButton", {
-			Parent = newFrame,
-			Name = "Up",
-			Size = UDim2.new(0, 16, 0, 16),
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			AutoButtonColor = false,
-		})
-		createArrow(16, 4, "up").Parent = button1
-		button2 = createSimple("ImageButton", {
-			Parent = newFrame,
-			Name = "Down",
-			Position = UDim2.new(0, 0, 1, -16),
-			Size = UDim2.new(0, 16, 0, 16),
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			AutoButtonColor = false,
-		})
-		createArrow(16, 4, "down").Parent = button2
-	end
+	thumb.Visible = self:CanScrollUp() or self:CanScrollDown()
+	if not thumb.Visible then return end
 
-	local scrollThumbFrame = createSimple("Frame", {
+	local axis = self.Horizontal and "X" or "Y"
+	local fraction = visible / total
+	thumb.Size = self.Horizontal and UDim2.new(fraction, 0, 1, 0) or UDim2.new(1, 0, fraction, 0)
+	if thumb.AbsoluteSize[axis] < MIN_THUMB_SIZE then thumb.Size = self.Horizontal and UDim2.new(0, MIN_THUMB_SIZE, 1, 0) or UDim2.new(1, 0, 0, MIN_THUMB_SIZE) end
+
+	local frameSize = thumbFrame.AbsoluteSize[axis]
+	local offset = frameSize > 0 and self:GetScrollPercent() * (frameSize - thumb.AbsoluteSize[axis]) / frameSize or 0
+	thumb.Position = self.Horizontal and UDim2.new(offset, 0, 0, 0) or UDim2.new(0, 0, offset, 0)
+end
+
+local function createArrowButton(parent: Frame, name: string, position: UDim2, direction: string): ImageButton
+	local button = createSimple("ImageButton", {
+		Name = name,
+		Position = position,
+		Size = UDim2.new(0, 16, 0, 16),
 		BackgroundTransparency = 1,
-		Parent = newFrame,
-	})
-	if self.Horizontal then
-		scrollThumbFrame.Position = UDim2.new(0, 16, 0, 0)
-		scrollThumbFrame.Size = UDim2.new(1, -32, 1, 0)
-	else
-		scrollThumbFrame.Position = UDim2.new(0, 0, 0, 16)
-		scrollThumbFrame.Size = UDim2.new(1, 0, 1, -32)
-	end
-
-	local scrollThumb = createSimple("Frame", {
-		BackgroundColor3 = Color3.new(120 / 255, 120 / 255, 120 / 255),
 		BorderSizePixel = 0,
-		Parent = scrollThumbFrame,
+		AutoButtonColor = false,
+		Parent = parent,
 	})
+	Lib.CreateArrow(16, 4, direction).Parent = button
+	return button
+end
 
-	local markerFrame = createSimple("Frame", {
-		BackgroundTransparency = 1,
-		Name = "Markers",
-		Size = UDim2.new(1, 0, 1, 0),
-		Parent = scrollThumbFrame,
-	})
+-- Arrow button that scrolls once on press and repeatedly while held
+local function bindArrowButton(self: ScrollBar, button: ImageButton, canScroll: () -> boolean, scroll: () -> ())
+	local isHeld = false
 
-	local buttonPress = false
-	local thumbPress = false
-	local thumbFramePress = false
+	button.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement and not isHeld and canScroll() then button.BackgroundTransparency = 0.8 end
+		if not isMouseButton1(input) or not canScroll() then return end
 
-	--local thumbColor = Color3.new(120/255,120/255,120/255)
-	--local thumbSelectColor = Color3.new(140/255,140/255,140/255)
-	button1.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseMovement and not buttonPress and self:CanScrollUp() then button1.BackgroundTransparency = 0.8 end
-		if input.UserInputType ~= Enum.UserInputType.MouseButton1 or not self:CanScrollUp() then return end
-		buttonPress = true
-		button1.BackgroundTransparency = 0.5
-		if self:CanScrollUp() then
-			self:ScrollUp()
-			self.Scrolled:Fire()
-		end
-		local buttonTick = tick()
-		local releaseEvent
-		releaseEvent = user.InputEnded:Connect(function(input)
-			if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
-			releaseEvent:Disconnect()
-			if checkMouseInGui(button1) and self:CanScrollUp() then
-				button1.BackgroundTransparency = 0.8
-			else
-				button1.BackgroundTransparency = 1
-			end
-			buttonPress = false
+		isHeld = true
+		button.BackgroundTransparency = 0.5
+		scroll()
+		self.Scrolled:Fire()
+
+		onMouseRelease(function()
+			isHeld = false
+			button.BackgroundTransparency = (Lib.CheckMouseInGui(button) and canScroll()) and 0.8 or 1
 		end)
-		while buttonPress do
-			if tick() - buttonTick >= 0.3 and self:CanScrollUp() then
-				self:ScrollUp()
+
+		local pressedAt = os.clock()
+		while isHeld do
+			if os.clock() - pressedAt >= HOLD_DELAY and canScroll() then
+				scroll()
 				self.Scrolled:Fire()
 			end
-			wait()
+			task.wait()
 		end
-	end)
-	button1.InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseMovement and not buttonPress then button1.BackgroundTransparency = 1 end
-	end)
-	button2.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseMovement and not buttonPress and self:CanScrollDown() then button2.BackgroundTransparency = 0.8 end
-		if input.UserInputType ~= Enum.UserInputType.MouseButton1 or not self:CanScrollDown() then return end
-		buttonPress = true
-		button2.BackgroundTransparency = 0.5
-		if self:CanScrollDown() then
-			self:ScrollDown()
-			self.Scrolled:Fire()
-		end
-		local buttonTick = tick()
-		local releaseEvent
-		releaseEvent = user.InputEnded:Connect(function(input)
-			if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
-			releaseEvent:Disconnect()
-			if checkMouseInGui(button2) and self:CanScrollDown() then
-				button2.BackgroundTransparency = 0.8
-			else
-				button2.BackgroundTransparency = 1
-			end
-			buttonPress = false
-		end)
-		while buttonPress do
-			if tick() - buttonTick >= 0.3 and self:CanScrollDown() then
-				self:ScrollDown()
-				self.Scrolled:Fire()
-			end
-			wait()
-		end
-	end)
-	button2.InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseMovement and not buttonPress then button2.BackgroundTransparency = 1 end
 	end)
 
-	scrollThumb.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseMovement and not thumbPress then
-			scrollThumb.BackgroundTransparency = 0.2
-			scrollThumb.BackgroundColor3 = self.ThumbSelectColor
+	button.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement and not isHeld then button.BackgroundTransparency = 1 end
+	end)
+end
+
+local function bindThumb(self: ScrollBar, thumb: Frame, thumbFrame: Frame)
+	local isDragging = false
+
+	thumb.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement and not isDragging then
+			thumb.BackgroundTransparency = 0.2
+			thumb.BackgroundColor3 = self.ThumbSelectColor
 		end
-		if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+		if not isMouseButton1(input) then return end
 
-		local dir = self.Horizontal and "X" or "Y"
-		local lastThumbPos = nil
+		local axis = self.Horizontal and "X" or "Y"
+		local mouseOffset = mouse[axis] - thumb.AbsolutePosition[axis]
+		local lastPosition = nil
+		local moveConnection
 
-		buttonPress = false
-		thumbFramePress = false
-		thumbPress = true
-		scrollThumb.BackgroundTransparency = 0
-		local mouseOffset = mouse[dir] - scrollThumb.AbsolutePosition[dir]
-		local mouseStart = mouse[dir]
-		local releaseEvent
-		local mouseEvent
-		releaseEvent = user.InputEnded:Connect(function(input)
-			if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
-			releaseEvent:Disconnect()
-			if mouseEvent then mouseEvent:Disconnect() end
-			if checkMouseInGui(scrollThumb) then
-				scrollThumb.BackgroundTransparency = 0.2
-			else
-				scrollThumb.BackgroundTransparency = 0
-				scrollThumb.BackgroundColor3 = self.ThumbColor
-			end
-			thumbPress = false
-		end)
+		isDragging = true
+		thumb.BackgroundTransparency = 0
 		self:Update()
 
-		mouseEvent = user.InputChanged:Connect(function(input)
-			if input.UserInputType == Enum.UserInputType.MouseMovement and thumbPress and releaseEvent.Connected then
-				local thumbFrameSize = scrollThumbFrame.AbsoluteSize[dir] - scrollThumb.AbsoluteSize[dir]
-				local pos = mouse[dir] - scrollThumbFrame.AbsolutePosition[dir] - mouseOffset
-				if pos > thumbFrameSize then
-					pos = thumbFrameSize
-				elseif pos < 0 then
-					pos = 0
-				end
-				if lastThumbPos ~= pos then
-					lastThumbPos = pos
-					self:ScrollTo(math.floor(0.5 + pos / thumbFrameSize * (self.TotalSpace - self.VisibleSpace)))
-				end
-				wait()
+		onMouseRelease(function()
+			isDragging = false
+			moveConnection:Disconnect()
+			if Lib.CheckMouseInGui(thumb) then
+				thumb.BackgroundTransparency = 0.2
+			else
+				thumb.BackgroundTransparency = 0
+				thumb.BackgroundColor3 = self.ThumbColor
 			end
 		end)
+
+		moveConnection = UserInputService.InputChanged:Connect(function(movement)
+			if movement.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+
+			local trackSize = thumbFrame.AbsoluteSize[axis] - thumb.AbsoluteSize[axis]
+			if trackSize <= 0 then return end
+
+			local position = math.clamp(mouse[axis] - thumbFrame.AbsolutePosition[axis] - mouseOffset, 0, trackSize)
+			if position == lastPosition then return end
+
+			lastPosition = position
+			self:ScrollTo(math.floor(0.5 + position / trackSize * (self.TotalSpace - self.VisibleSpace)))
+		end)
 	end)
-	scrollThumb.InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseMovement and not thumbPress then
-			scrollThumb.BackgroundTransparency = 0
-			scrollThumb.BackgroundColor3 = self.ThumbColor
+
+	thumb.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement and not isDragging then
+			thumb.BackgroundTransparency = 0
+			thumb.BackgroundColor3 = self.ThumbColor
 		end
 	end)
-	scrollThumbFrame.InputBegan:Connect(function(input)
-		if input.UserInputType ~= Enum.UserInputType.MouseButton1 or checkMouseInGui(scrollThumb) then return end
 
-		local dir = self.Horizontal and "X" or "Y"
-		local scrollDir = 0
-		if mouse[dir] >= scrollThumb.AbsolutePosition[dir] + scrollThumb.AbsoluteSize[dir] then scrollDir = 1 end
+	-- Clicking the track pages towards the mouse, repeating while held
+	thumbFrame.InputBegan:Connect(function(input)
+		if not isMouseButton1(input) or Lib.CheckMouseInGui(thumb) then return end
 
-		local function doTick()
-			local scrollSize = self.VisibleSpace - 1
-			if scrollDir == 0 and mouse[dir] < scrollThumb.AbsolutePosition[dir] then
-				self:ScrollTo(self.Index - scrollSize)
-			elseif scrollDir == 1 and mouse[dir] >= scrollThumb.AbsolutePosition[dir] + scrollThumb.AbsoluteSize[dir] then
-				self:ScrollTo(self.Index + scrollSize)
+		local axis = self.Horizontal and "X" or "Y"
+		local isForward = mouse[axis] >= thumb.AbsolutePosition[axis] + thumb.AbsoluteSize[axis]
+		local isHeld = true
+
+		local function page()
+			local pageSize = self.VisibleSpace - 1
+			local thumbStart = thumb.AbsolutePosition[axis]
+			if not isForward and mouse[axis] < thumbStart then
+				self:ScrollTo(self.Index - pageSize)
+			elseif isForward and mouse[axis] >= thumbStart + thumb.AbsoluteSize[axis] then
+				self:ScrollTo(self.Index + pageSize)
 			end
 		end
 
-		thumbPress = false
-		thumbFramePress = true
-		doTick()
-		local thumbFrameTick = tick()
-		local releaseEvent
-		releaseEvent = user.InputEnded:Connect(function(input)
-			if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
-			releaseEvent:Disconnect()
-			thumbFramePress = false
-		end)
-		while thumbFramePress do
-			if tick() - thumbFrameTick >= 0.3 and checkMouseInGui(scrollThumbFrame) then doTick() end
-			wait()
+		page()
+		onMouseRelease(function() isHeld = false end)
+
+		local pressedAt = os.clock()
+		while isHeld do
+			if os.clock() - pressedAt >= HOLD_DELAY and Lib.CheckMouseInGui(thumbFrame) then page() end
+			task.wait()
 		end
 	end)
-
-	newFrame.MouseWheelForward:Connect(function() self:ScrollTo(self.Index - self.WheelIncrement) end)
-
-	newFrame.MouseWheelBackward:Connect(function() self:ScrollTo(self.Index + self.WheelIncrement) end)
-
-	self.GuiElems.ScrollThumb = scrollThumb
-	self.GuiElems.ScrollThumbFrame = scrollThumbFrame
-	self.GuiElems.Button1 = button1
-	self.GuiElems.Button2 = button2
-	self.GuiElems.MarkerFrame = markerFrame
-
-	return newFrame
 end
 
-funcs.Update = function(self, nocallback)
-	local total = self.TotalSpace
-	local visible = self.VisibleSpace
-	local index = self.Index
-	local button1 = self.GuiElems.Button1
-	local button2 = self.GuiElems.Button2
+local function createFrame(self: ScrollBar): Frame
+	local isHorizontal = self.Horizontal
+	local frame = createSimple("Frame", {
+		Name = "ScrollBar",
+		Active = true,
+		BorderSizePixel = 0,
+		Position = UDim2.new(1, -16, 0, 0),
+		Size = isHorizontal and UDim2.new(1, 0, 0, 16) or UDim2.new(0, 16, 1, 0),
+	})
 
-	self.Index = math.clamp(self.Index, 0, math.max(0, total - visible))
+	local button1 = createArrowButton(frame, isHorizontal and "Left" or "Up", UDim2.new(), isHorizontal and "left" or "up")
+	local button2 = createArrowButton(frame, isHorizontal and "Right" or "Down", isHorizontal and UDim2.new(1, -16, 0, 0) or UDim2.new(0, 0, 1, -16), isHorizontal and "right" or "down")
 
-	if self.LastTotalSpace ~= self.TotalSpace then
-		self.LastTotalSpace = self.TotalSpace
-		self:UpdateMarkers()
-	end
+	local thumbFrame = createSimple("Frame", {
+		BackgroundTransparency = 1,
+		Position = isHorizontal and UDim2.new(0, 16, 0, 0) or UDim2.new(0, 0, 0, 16),
+		Size = isHorizontal and UDim2.new(1, -32, 1, 0) or UDim2.new(1, 0, 1, -32),
+		Parent = frame,
+	})
 
-	if self:CanScrollUp() then
-		for i, v in pairs(button1.Arrow:GetChildren()) do
-			v.BackgroundTransparency = 0
-		end
-	else
-		button1.BackgroundTransparency = 1
-		for i, v in pairs(button1.Arrow:GetChildren()) do
-			v.BackgroundTransparency = 0.5
-		end
+	local thumb = createSimple("Frame", {
+		BorderSizePixel = 0,
+		Parent = thumbFrame,
+	})
+
+	bindArrowButton(self, button1, function() return self:CanScrollUp() end, function() self:ScrollUp() end)
+	bindArrowButton(self, button2, function() return self:CanScrollDown() end, function() self:ScrollDown() end)
+	bindThumb(self, thumb, thumbFrame)
+
+	frame.MouseWheelForward:Connect(function() self:ScrollTo(self.Index - self.WheelIncrement) end)
+	frame.MouseWheelBackward:Connect(function() self:ScrollTo(self.Index + self.WheelIncrement) end)
+
+	self.GuiElems.ScrollThumb = thumb
+	self.GuiElems.ScrollThumbFrame = thumbFrame
+	self.GuiElems.Button1 = button1
+	self.GuiElems.Button2 = button2
+	self.GuiElems.Arrow1Lines = button1.Arrow:GetChildren()
+	self.GuiElems.Arrow2Lines = button2.Arrow:GetChildren()
+
+	return frame
+end
+
+local function setLinesTransparency(lines: { Frame }, transparency: number)
+	for _, line in lines do
+		line.BackgroundTransparency = transparency
 	end
-	if self:CanScrollDown() then
-		for i, v in pairs(button2.Arrow:GetChildren()) do
-			v.BackgroundTransparency = 0
-		end
-	else
-		button2.BackgroundTransparency = 1
-		for i, v in pairs(button2.Arrow:GetChildren()) do
-			v.BackgroundTransparency = 0.5
-		end
-	end
+end
+
+function methods.Update(self: ScrollBar)
+	local elems = self.GuiElems
+	self.Index = math.clamp(self.Index, 0, math.max(0, self.TotalSpace - self.VisibleSpace))
+
+	local canScrollUp = self:CanScrollUp()
+	if not canScrollUp then elems.Button1.BackgroundTransparency = 1 end
+	setLinesTransparency(elems.Arrow1Lines, canScrollUp and 0 or 0.5)
+
+	local canScrollDown = self:CanScrollDown()
+	if not canScrollDown then elems.Button2.BackgroundTransparency = 1 end
+	setLinesTransparency(elems.Arrow2Lines, canScrollDown and 0 or 0.5)
 
 	drawThumb(self)
 end
 
-funcs.UpdateMarkers = function(self)
-	local markerFrame = self.GuiElems.MarkerFrame
-	markerFrame:ClearAllChildren()
-
-	for i, v in pairs(self.Markers) do
-		if i < self.TotalSpace then
-			createSimple("Frame", {
-				BackgroundTransparency = 0,
-				BackgroundColor3 = v,
-				BorderSizePixel = 0,
-				Position = self.Horizontal and UDim2.new(i / self.TotalSpace, 0, 1, -6) or UDim2.new(1, -6, i / self.TotalSpace, 0),
-				Size = self.Horizontal and UDim2.new(0, 1, 0, 6) or UDim2.new(0, 6, 0, 1),
-				Name = "Marker" .. tostring(i),
-				Parent = markerFrame,
-			})
-		end
-	end
+function methods.ScrollTo(self: ScrollBar, index: number, noCallback: boolean?)
+	self.Index = index
+	self:Update()
+	if not noCallback then self.Scrolled:Fire() end
 end
 
-funcs.AddMarker = function(self, ind, color) self.Markers[ind] = color or Color3.new(0, 0, 0) end
-funcs.ScrollTo = function(self, ind, nocallback)
-	self.Index = ind
-	self:Update()
-	if not nocallback then self.Scrolled:Fire() end
-end
-funcs.ScrollUp = function(self)
-	self.Index = self.Index - self.Increment
-	self:Update()
-end
-funcs.ScrollDown = function(self)
-	self.Index = self.Index + self.Increment
-	self:Update()
-end
-funcs.CanScrollUp = function(self) return self.Index > 0 end
-funcs.CanScrollDown = function(self) return self.Index + self.VisibleSpace < self.TotalSpace end
-funcs.GetScrollPercent = function(self) return self.Index / (self.TotalSpace - self.VisibleSpace) end
-funcs.SetScrollPercent = function(self, perc)
-	self.Index = math.floor(perc * (self.TotalSpace - self.VisibleSpace))
+function methods.ScrollUp(self: ScrollBar)
+	self.Index -= self.Increment
 	self:Update()
 end
 
-funcs.Texture = function(self, data)
-	self.ThumbColor = data.ThumbColor or Color3.new(0, 0, 0)
-	self.ThumbSelectColor = data.ThumbSelectColor or Color3.new(0, 0, 0)
-	self.GuiElems.ScrollThumb.BackgroundColor3 = data.ThumbColor or Color3.new(0, 0, 0)
-	self.Gui.BackgroundColor3 = data.FrameColor or Color3.new(0, 0, 0)
-	self.GuiElems.Button1.BackgroundColor3 = data.ButtonColor or Color3.new(0, 0, 0)
-	self.GuiElems.Button2.BackgroundColor3 = data.ButtonColor or Color3.new(0, 0, 0)
-	for i, v in pairs(self.GuiElems.Button1.Arrow:GetChildren()) do
-		v.BackgroundColor3 = data.ArrowColor or Color3.new(0, 0, 0)
+function methods.ScrollDown(self: ScrollBar)
+	self.Index += self.Increment
+	self:Update()
+end
+
+function methods.CanScrollUp(self: ScrollBar): boolean return self.Index > 0 end
+
+function methods.CanScrollDown(self: ScrollBar): boolean return self.Index + self.VisibleSpace < self.TotalSpace end
+
+function methods.GetScrollPercent(self: ScrollBar): number
+	local scrollable = self.TotalSpace - self.VisibleSpace
+	return scrollable > 0 and self.Index / scrollable or 0
+end
+
+function methods.SetScrollPercent(self: ScrollBar, percent: number)
+	self.Index = math.floor(percent * (self.TotalSpace - self.VisibleSpace))
+	self:Update()
+end
+
+function methods.Texture(self: ScrollBar, data: { [string]: Color3 })
+	local elems = self.GuiElems
+	self.ThumbColor = data.ThumbColor or Color3.new()
+	self.ThumbSelectColor = data.ThumbSelectColor or Color3.new()
+	elems.ScrollThumb.BackgroundColor3 = self.ThumbColor
+	self.Gui.BackgroundColor3 = data.FrameColor or Color3.new()
+	elems.Button1.BackgroundColor3 = data.ButtonColor or Color3.new()
+	elems.Button2.BackgroundColor3 = data.ButtonColor or Color3.new()
+
+	local arrowColor = data.ArrowColor or Color3.new()
+	for _, line in elems.Arrow1Lines do
+		line.BackgroundColor3 = arrowColor
 	end
-	for i, v in pairs(self.GuiElems.Button2.Arrow:GetChildren()) do
-		v.BackgroundColor3 = data.ArrowColor or Color3.new(0, 0, 0)
+	for _, line in elems.Arrow2Lines do
+		line.BackgroundColor3 = arrowColor
 	end
 end
 
-funcs.SetScrollFrame = function(self, frame)
-	if self.ScrollUpEvent then
-		self.ScrollUpEvent:Disconnect()
-		self.ScrollUpEvent = nil
-	end
-	if self.ScrollDownEvent then
-		self.ScrollDownEvent:Disconnect()
-		self.ScrollDownEvent = nil
-	end
+-- Lets another frame scroll this bar with the mouse wheel
+function methods.SetScrollFrame(self: ScrollBar, frame: GuiObject)
+	if self.ScrollUpEvent then self.ScrollUpEvent:Disconnect() end
+	if self.ScrollDownEvent then self.ScrollDownEvent:Disconnect() end
+
 	self.ScrollUpEvent = frame.MouseWheelForward:Connect(function() self:ScrollTo(self.Index - self.WheelIncrement) end)
 	self.ScrollDownEvent = frame.MouseWheelBackward:Connect(function() self:ScrollTo(self.Index + self.WheelIncrement) end)
 end
 
-local mt = {}
-mt.__index = funcs
+local metatable = { __index = methods }
 
-local function new(hor)
-	local obj = setmetatable({
+local function new(isHorizontal: boolean?): ScrollBar
+	local self = setmetatable({
 		Index = 0,
 		VisibleSpace = 0,
 		TotalSpace = 0,
 		Increment = 1,
 		WheelIncrement = 1,
-		Markers = {},
 		GuiElems = {},
-		Horizontal = hor,
-		LastTotalSpace = 0,
+		Horizontal = isHorizontal == true,
 		Scrolled = Lib.Signal.new(),
-	}, mt)
-	obj.Gui = createFrame(obj)
-	obj:Texture({
-		ThumbColor = Color3.fromRGB(60, 60, 60),
-		ThumbSelectColor = Color3.fromRGB(75, 75, 75),
-		ArrowColor = Color3.new(1, 1, 1),
-		FrameColor = Color3.fromRGB(40, 40, 40),
-		ButtonColor = Color3.fromRGB(75, 75, 75),
+	}, metatable) :: any
+
+	self.Gui = createFrame(self)
+	self:Texture({
+		ThumbColor = THUMB_COLOR,
+		ThumbSelectColor = THUMB_SELECT_COLOR,
+		ArrowColor = ARROW_COLOR,
+		FrameColor = FRAME_COLOR,
+		ButtonColor = BUTTON_COLOR,
 	})
-	return obj
+
+	return self
 end
 
 return { new = new }

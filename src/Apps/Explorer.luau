@@ -7,6 +7,8 @@
 local Context = require("@core/Context")
 local Create = require("@core/Create")
 local SaveInstance = require("@core/SaveInstance")
+local SearchQuery = require("@core/Search/Query")
+local Suggest = require("@core/Search/Suggest")
 
 local Main = Context.Main
 local Lib = Context.Lib
@@ -15,12 +17,22 @@ local Settings = Context.Settings
 local env = Context.env
 local service = Context.service
 local plr = Context.plr
-local cloneref = Context.cloneref
 local create = Create.create
 local nodes = Context.Nodes
 local API, RMD
 local Explorer, Properties, ScriptViewer
 local selection
+
+-- Shortens copied paths: workspace and the LocalPlayer instead of their full GetService paths
+local function shortenPath(path: string): string
+	local workspacePrefix = 'game:GetService("Workspace")'
+	if string.sub(path, 1, #workspacePrefix) == workspacePrefix then path = "workspace" .. string.sub(path, #workspacePrefix + 1) end
+
+	local playerPrefix = 'game:GetService("Players").' .. plr.Name
+	if string.sub(path, 1, #playerPrefix) == playerPrefix then path = 'game:GetService("Players").LocalPlayer' .. string.sub(path, #playerPrefix + 1) end
+
+	return path
+end
 
 local function initAfterMain()
 	Explorer = Apps.Explorer
@@ -31,7 +43,7 @@ end
 local function main()
 	API, RMD = Context.API, Context.RMD
 	local Explorer = {}
-	local tree, listEntries, explorerOrders, searchResults, specResults = {}, {}, {}, {}, {}
+	local tree, listEntries, explorerOrders, searchResults = {}, {}, {}, {}
 	local expanded
 	local entryTemplate, treeFrame, toolBar, descendantAddedCon, descendantRemovingCon, itemChangedCon
 	local ffa = game.FindFirstAncestorWhichIsA
@@ -47,6 +59,7 @@ local function main()
 	local nilMap, nilCons = {}, {}
 	local connectSignal = game.DescendantAdded.Connect
 	local addObject, removeObject, moveObject = nil, nil, nil
+	local pendingDelParents = {}
 
 	addObject = function(root)
 		if nodes[root] then return end
@@ -155,7 +168,10 @@ local function main()
 		end
 
 		local par = node.Parent
-		if par then par.HasDel = true end
+		if par and not par.HasDel then
+			par.HasDel = true
+			pendingDelParents[par] = true
+		end
 
 		local function recur(root)
 			for i = 1, #root do
@@ -590,14 +606,14 @@ local function main()
 				local listOffsetX = startX - treeFrame.AbsolutePosition.X
 				local listOffsetY = startY - treeFrame.AbsolutePosition.Y
 
-				releaseEvent = cloneref(game:GetService("UserInputService")).InputEnded:Connect(function(input)
+				releaseEvent = service.UserInputService.InputEnded:Connect(function(input)
 					if input.UserInputType == Enum.UserInputType.MouseButton1 then
 						releaseEvent:Disconnect()
 						mouseEvent:Disconnect()
 					end
 				end)
 
-				mouseEvent = cloneref(game:GetService("UserInputService")).InputChanged:Connect(function(input)
+				mouseEvent = service.UserInputService.InputChanged:Connect(function(input)
 					if input.UserInputType == Enum.UserInputType.MouseMovement then
 						local deltaX = mouse.X - startX
 						local deltaY = mouse.Y - startY
@@ -821,6 +837,8 @@ local function main()
 
 	Explorer.ViewObj = function(obj) Explorer.ViewNode(nodes[obj]) end
 
+	Explorer.GetNode = function(obj: Instance) return nodes[obj] end
+
 	Explorer.MakeNodeVisible = function(node, expandRoot)
 		if not node then return end
 
@@ -881,7 +899,10 @@ local function main()
 		context:AddRegistered("COLLAPSE_ALL")
 
 		context:AddDivider()
-		if expanded == Explorer.SearchExpanded then context:AddRegistered("CLEAR_SEARCH_AND_JUMP_TO") end
+		if expanded == Explorer.SearchExpanded then
+			context:AddRegistered("SELECT_SEARCH_MATCHES")
+			context:AddRegistered("CLEAR_SEARCH_AND_JUMP_TO")
+		end
 		if env.setclipboard then
 			context:AddRegistered("COPY_PATH")
 			context:AddRegistered("COPY_NODE")
@@ -929,7 +950,7 @@ local function main()
 			IconMap = Explorer.MiscIcons,
 			Icon = "Cut",
 			DisabledIcon = "Cut_Disabled",
-			Shortcut = "Ctrl+Z",
+			Shortcut = "Ctrl+X",
 			OnClick = function()
 				local destroy, clone = game.Destroy, game.Clone
 				local sList, newClipboard = selection.List, {}
@@ -1072,7 +1093,8 @@ local function main()
 				local sList = selection.List
 				if #sList == 0 then return end
 
-				local model = Instance.new("Model", sList[#sList].Obj.Parent)
+				local model = Instance.new("Model")
+				model.Parent = sList[#sList].Obj.Parent
 				for i = 1, #sList do
 					pcall(function() sList[i].Obj.Parent = model end)
 				end
@@ -1112,7 +1134,7 @@ local function main()
 						pcall(function() ch[i].Obj.Parent = par end)
 					end
 
-					node.Obj:Destroy()
+					pcall(node.Obj.Destroy, node.Obj)
 				end
 
 				for i, v in next, selection.List do
@@ -1201,7 +1223,7 @@ local function main()
 						if node.Obj.PrimaryPart then
 							cframe = node.Obj.PrimaryPart.CFrame + Settings.Explorer.TeleportToOffset
 						else
-							cframe = node.Obj:GetModelCFrame() + Settings.Explorer.TeleportToOffset
+							cframe = node.Obj:GetPivot() + Settings.Explorer.TeleportToOffset
 						end
 					end
 
@@ -1232,10 +1254,10 @@ local function main()
 							hrp.CFrame = node.Obj.PrimaryPart.CFrame + Settings.Explorer.TeleportToOffset
 							break
 						else
-							plr:RequestStreamAroundAsync(node.Obj:GetModelCFrame().Position, 1)
+							plr:RequestStreamAroundAsync(node.Obj:GetPivot().Position, 1)
 							-- local part = node.Obj:FindFirstChildWhichIsA("BasePart", true)
 							-- if part and nodes[part] then hrp.CFrame = nodes[part].Obj.CFrame + Settings.Explorer.TeleportToOffset end
-							hrp.CFrame = node.Obj:GetModelCFrame() + Settings.Explorer.TeleportToOffset
+							hrp.CFrame = node.Obj:GetPivot() + Settings.Explorer.TeleportToOffset
 						end
 						break
 					end
@@ -1283,6 +1305,16 @@ local function main()
 			end,
 		})
 
+		context:Register("SELECT_SEARCH_MATCHES", {
+			Name = "Select All Matches",
+			IconMap = Explorer.MiscIcons,
+			Icon = "SelectChildren",
+			OnClick = function()
+				selection:SetTable(Explorer.GetSearchMatches())
+				Explorer.Refresh()
+			end,
+		})
+
 		context:Register("CLEAR_SEARCH_AND_JUMP_TO", {
 			Name = "Clear Search and Jump to",
 			OnClick = function()
@@ -1301,23 +1333,17 @@ local function main()
 			end,
 		})
 
-		local clth = function(str)
-			if str:sub(1, 28) == 'game:GetService("Workspace")' then str = str:gsub('game:GetService%("Workspace"%)', "workspace", 1) end
-			if str:sub(1, 27 + #plr.Name) == 'game:GetService("Players").' .. plr.Name then str = str:gsub('game:GetService%("Players"%).' .. plr.Name, 'game:GetService("Players").LocalPlayer', 1) end
-			return str
-		end
-
 		context:Register("COPY_PATH", {
 			Name = "Copy Path",
 			OnClick = function()
 				local sList = selection.List
 				if #sList == 1 then
-					env.setclipboard(clth(Explorer.GetInstancePath(sList[1].Obj)))
+					env.setclipboard(shortenPath(Explorer.GetInstancePath(sList[1].Obj)))
 				elseif #sList > 1 then
 					local resList = { "{" }
 					local count = 2
 					for i = 1, #sList do
-						local path = "\t" .. clth(Explorer.GetInstancePath(sList[i].Obj)) .. ","
+						local path = "\t" .. shortenPath(Explorer.GetInstancePath(sList[i].Obj)) .. ","
 						if #path > 0 then
 							resList[count] = path
 							count = count + 1
@@ -1332,9 +1358,12 @@ local function main()
 		context:Register("COPY_NODE", {
 			Name = "Copy Node Info",
 			OnClick = function()
-				local sList = selection.List
-				local node = sList[1]
-				--env.setclipboard(serialize_table(node))
+				local lines = {}
+				for _, node in selection.List do
+					local obj = node.Obj
+					table.insert(lines, string.format("%s (%s) | %d children | %s", obj.Name, obj.ClassName, #node, shortenPath(Explorer.GetInstancePath(obj))))
+				end
+				env.setclipboard(table.concat(lines, "\n"))
 			end,
 		})
 
@@ -1360,7 +1389,16 @@ local function main()
 			end,
 		})
 
-		context:Register("GET_REFERENCES", { Name = "Get Lua References", IconMap = Explorer.ClassIcons, Icon = 34, OnClick = function() end })
+		context:Register("GET_REFERENCES", {
+			Name = "Get Lua References",
+			IconMap = Explorer.ClassIcons,
+			Icon = 34,
+			OnClick = function()
+				local node = selection.List[1]
+				if not node then return end
+				ScriptViewer.ShowText("Lua References", Explorer.FindReferences(node.Obj))
+			end,
+		})
 
 		context:Register("SAVE_INST", {
 			Name = "Save to File",
@@ -1388,7 +1426,21 @@ local function main()
 			end,
 		})
 
-		context:Register("VIEW_API", { Name = "View API Page", IconMap = Explorer.MiscIcons, Icon = "Reference", OnClick = function() end })
+		context:Register("VIEW_API", {
+			Name = "Copy API Page Link",
+			IconMap = Explorer.MiscIcons,
+			Icon = "Reference",
+			OnClick = function()
+				local node = selection.List[1]
+				if not node then return end
+				local url = "https://create.roblox.com/docs/reference/engine/classes/" .. node.Obj.ClassName
+				if env.setclipboard then
+					env.setclipboard(url)
+				else
+					print(url)
+				end
+			end,
+		})
 
 		context:Register("VIEW_OBJECT", {
 			Name = "View Object (Right click to reset)",
@@ -1515,7 +1567,7 @@ local function main()
 
 				local node = sList[1]
 				if isa(node.Obj, "Model") then
-					for _, v in ipairs(cloneref(game:GetService("Players")):GetPlayers()) do
+					for _, v in ipairs(service.Players:GetPlayers()) do
 						if v.Character == node.Obj then
 							selection:Set(nodes[v])
 							Explorer.ViewNode(nodes[v])
@@ -1685,309 +1737,247 @@ local function main()
 		return path
 	end
 
+	-- The API class of className followed by all its superclasses
+	local function getClassChain(className)
+		local chain = {}
+		local apiClass = API.Classes[className]
+		while apiClass do
+			table.insert(chain, apiClass)
+			apiClass = apiClass.Superclass
+		end
+		return chain
+	end
+
+	local function findMember(className, kind, name)
+		for _, apiClass in getClassChain(className) do
+			for _, member in apiClass[kind] do
+				if member.Name == name then return member end
+			end
+		end
+		return nil
+	end
+
+	local function parameterNames(member)
+		local names = {}
+		for _, parameter in member and member.Parameters or {} do
+			table.insert(names, parameter.Name)
+		end
+		return table.concat(names, ", ")
+	end
+
+	local function createMemberContext()
+		local context = Lib.ContextMenu.new()
+		context.SearchEnabled = true
+		context.MaxHeight = 400
+		context:ApplyTheme({
+			ContentColor = Settings.Theme.Main2,
+			OutlineColor = Settings.Theme.Outline1,
+			DividerColor = Settings.Theme.Outline1,
+			TextColor = Settings.Theme.Text,
+			HighlightColor = Settings.Theme.ButtonHover,
+		})
+		return context
+	end
+
+	-- Adds every member of the selected classes, grouped under the class that declares it
+	local function addClassMembers(context, nodesList, kind: "Functions" | "Events", showDeprecated: boolean, makeItem)
+		local seenClasses, added = {}, {}
+		for _, node in nodesList do
+			local className = node.Obj.ClassName
+			if seenClasses[className] then continue end
+			seenClasses[className] = true
+
+			for _, apiClass in getClassChain(className) do
+				local rmdEntry = RMD.Classes[apiClass.Name]
+				local icon = rmdEntry and tonumber(rmdEntry.ExplorerImageIndex) or 0
+				local hasDivider = false
+
+				for _, member in apiClass[kind] do
+					if added[member.Name] or (member.Tags.Deprecated and not showDeprecated) then continue end
+					added[member.Name] = true
+
+					if not hasDivider then
+						context:AddDivider(apiClass.Name)
+						hasDivider = true
+					end
+
+					local item = makeItem(member)
+					item.IconMap = Explorer.ClassIcons
+					item.Icon = icon
+					context:Add(item)
+				end
+			end
+		end
+	end
+
 	Explorer.InitViewFunctions = function(x, y)
 		local context = Explorer.ViewFunctionsContext
 		if not context then
-			context = Lib.ContextMenu.new()
-			context.SearchEnabled = true
-			context.MaxHeight = 400
-			context:ApplyTheme({
-				ContentColor = Settings.Theme.Main2,
-				OutlineColor = Settings.Theme.Outline1,
-				DividerColor = Settings.Theme.Outline1,
-				TextColor = Settings.Theme.Text,
-				HighlightColor = Settings.Theme.ButtonHover,
-			})
+			context = createMemberContext()
 			Explorer.ViewFunctionsContext = context
 		end
 
-		local Classes = {}
-		local sList = selection.List
-		for i = 1, #sList do
-			local node = sList[i]
-			local obj = node.Obj
-			local class = obj.ClassName
-			if not Classes[class] then Classes[class] = {} end
-			table.insert(Classes[class], obj)
-		end
+		local selectedNodes = table.clone(selection.List)
 
-		local clth = function(str)
-			if str:sub(1, 28) == 'game:GetService("Workspace")' then str = str:gsub('game:GetService%("Workspace"%)', "workspace", 1) end
-			if str:sub(1, 27 + #plr.Name) == 'game:GetService("Players").' .. plr.Name then str = str:gsub('game:GetService%("Players"%).' .. plr.Name, 'game:GetService("Players").LocalPlayer', 1) end
-			return str
-		end
-
-		local function onClick(fName)
-			local m = ""
-			for i = 1, #sList do
-				local node = sList[i]
+		local function copyCalls(functionName)
+			local lines = {}
+			for _, node in selectedNodes do
 				local obj = node.Obj
-				local class = obj.ClassName
-				local path = clth(Explorer.GetInstancePath(obj))
-				local args, retrs = (function()
-					local apiClass = API.Classes[class]
-					local apiSuperclass = apiClass.Superclass
-					local y, z
-
-					for _, d in next, { apiClass or {}, apiSuperclass or {}, API.Classes["Instance"] } do
-						for _, v in next, d.Functions do
-							if y and z then return y, z end
-							if v.Name == fName then y = (function()
-								local t = {}
-								for _, v2 in next, v.Parameters do
-									table.insert(t, v2.Name)
-								end
-								return table.concat(t, ", ")
-							end)() end
-							if v.Name == fName and #v.ReturnType > 0 then z = v.ReturnType end
-						end
-					end
-
-					return y, z
-				end)()
-				m = m .. string.format("%s:%s(%s) --[[ Return: %s ]]\n", path, fName, args or "", retrs or "")
+				local member = findMember(obj.ClassName, "Functions", functionName)
+				local path = shortenPath(Explorer.GetInstancePath(obj))
+				table.insert(lines, string.format("%s:%s(%s) --[[ Return: %s ]]", path, functionName, parameterNames(member), member and member.ReturnType or ""))
 			end
-
-			env.setclipboard(m)
+			env.setclipboard(table.concat(lines, "\n") .. "\n")
 		end
 
 		context:Clear()
-		local lastCategory = ""
-		local alreadyAdded = {}
-		for class, objList in next, Classes do
-			local apiClass = API.Classes[class]
-			local rmdEntry = RMD.Classes[class]
-			local iconInd = rmdEntry and tonumber(rmdEntry.ExplorerImageIndex) or 0
+		addClassMembers(context, selectedNodes, "Functions", Settings.Properties.ShowDeprecatedFunctions, function(member)
+			return {
+				Name = member.Name,
+				OnClick = function() copyCalls(member.Name) end,
+			}
+		end)
+		context:Show(x, y)
+	end
 
-			if lastCategory ~= class and apiClass and #apiClass.Functions > 0 then
-				context:AddDivider(class)
-				lastCategory = class
-			end
+	-- Scripts with Lua handlers connected to signal, or nil when getconnections is missing
+	local function getConnectedScripts(signal)
+		if not getconnections then return nil end
 
-			if apiClass and #apiClass.Functions > 0 then
-				for _, v in next, apiClass.Functions do
-					if not Settings.Properties.ShowDeprecatedFunctions and (v.Tags and v.Tags.Deprecated) then continue end
-					if table.find(alreadyAdded, v.Name) then continue end
-					table.insert(alreadyAdded, v.Name)
-					context:Add({
-						Name = v.Name,
-						IconMap = Explorer.ClassIcons,
-						Icon = iconInd,
-						OnClick = onClick,
-					})
-				end
-			end
+		local success, connections = pcall(getconnections, signal)
+		if not success then return {} end
 
-			if apiClass and apiClass.Superclass and #apiClass.Superclass.Functions > 0 then
-				context:AddDivider(apiClass.Superclass.Name)
-				for _, v in next, apiClass.Superclass.Functions do
-					if not Settings.Properties.ShowDeprecatedFunctions and (v.Tags and v.Tags.Deprecated) then continue end
-					if table.find(alreadyAdded, v.Name) then continue end
-					table.insert(alreadyAdded, v.Name)
-					context:Add({
-						Name = v.Name,
-						IconMap = Explorer.ClassIcons,
-						Icon = 0,
-						OnClick = onClick,
-					})
-				end
-			end
-
-			context:AddDivider("Instance")
-			for _, v in next, API.Classes["Instance"].Functions do
-				if not Settings.Properties.ShowDeprecatedFunctions and (v.Tags and v.Tags.Deprecated) then continue end
-				if table.find(alreadyAdded, v.Name) then continue end
-				table.insert(alreadyAdded, v.Name)
-				context:Add({
-					Name = v.Name,
-					IconMap = Explorer.ClassIcons,
-					Icon = 0,
-					OnClick = onClick,
-				})
+		local scripts = {}
+		for _, connection in connections do
+			local func = connection.Function
+			if type(func) == "function" and (not islclosure or islclosure(func)) then
+				local hasEnv, fenv = pcall(getfenv, func)
+				local scr = hasEnv and rawget(fenv, "script")
+				table.insert(scripts, typeof(scr) == "Instance" and scr or false)
 			end
 		end
-
-		context:Show(x, y)
+		return scripts
 	end
 
 	Explorer.InitViewConnections = function(x, y)
 		local context = Explorer.ViewConnectionsContext
 		if not context then
-			context = Lib.ContextMenu.new()
-			context.SearchEnabled = true
-			context.MaxHeight = 400
-			context:ApplyTheme({
-				ContentColor = Settings.Theme.Main2,
-				OutlineColor = Settings.Theme.Outline1,
-				DividerColor = Settings.Theme.Outline1,
-				TextColor = Settings.Theme.Text,
-				HighlightColor = Settings.Theme.ButtonHover,
-			})
+			context = createMemberContext()
 			Explorer.ViewConnectionsContext = context
 		end
 
-		local UpdateEvents
-		local Classes = {}
-		local Checked = {}
-		local sList = selection.List
-		for i = 1, #sList do
-			local node = sList[i]
-			local obj = node.Obj
-			local class = obj.ClassName
-			if not Classes[class] then Classes[class] = {} end
-			table.insert(Classes[class], obj)
+		local selectedNodes = table.clone(selection.List)
+		-- true: has Lua handlers, false: checked and has none
+		local checked = {}
+		local updateEvents
+
+		local function getSignal(obj, eventName)
+			local success, signal = pcall(function() return obj[eventName] end)
+			return success and signal or nil
 		end
 
-		local clth = function(str)
-			if str:sub(1, 28) == 'game:GetService("Workspace")' then str = str:gsub('game:GetService%("Workspace"%)', "workspace", 1) end
-			if str:sub(1, 27 + #plr.Name) == 'game:GetService("Players").' .. plr.Name then str = str:gsub('game:GetService%("Players"%).' .. plr.Name, 'game:GetService("Players").LocalPlayer', 1) end
-			return str
-		end
-
-		local function onRightClick(Event)
-			Event = Event:gsub(" 🟢", ""):gsub(" 🔴", "")
-			local m = ""
-			local m2 = ""
-			local paths = {}
-			for i = 1, #sList do
-				local node = sList[i]
-				local obj = node.Obj
-				local class = obj.ClassName
-				paths[obj] = clth(Explorer.GetInstancePath(obj))
-				m = m .. string.format("-- Connection: %s.%s\n", paths[obj], Event)
-				local te = "--[[\n	Scripts:\n"
-				local foundT = false
-				for _, v in getconnections(obj[Event]) do
-					local s = v.Function and getfenv(v.Function)
-					if s then
-						foundT = true
-						te = te .. "	" .. clth(Explorer.GetInstancePath(s.script)) .. "\n"
-					end
+		local function checkEvent(eventName)
+			checked[eventName] = false
+			for _, node in selectedNodes do
+				local signal = getSignal(node.Obj, eventName)
+				local scripts = signal and getConnectedScripts(signal)
+				if scripts and #scripts > 0 then
+					checked[eventName] = true
+					break
 				end
-				te = te .. "--]]\n"
-				if foundT then m = m .. te end
-
-				local args = (function()
-					local apiClass = API.Classes[class]
-					local apiSuperclass = apiClass.Superclass
-
-					for _, d in next, { apiClass or {}, apiSuperclass or {}, API.Classes["Instance"] } do
-						for _, v in next, d.Events do
-							if v.Name == Event and #v.Parameters > 0 then return (function()
-								local t = {}
-								for _, v2 in next, v.Parameters do
-									table.insert(t, v2.Name)
-								end
-								return table.concat(t, ", ")
-							end)() end
-						end
-					end
-
-					return ""
-				end)()
-
-				m2 = m2 .. string.format("%s.%s:Connect(function(%s)\n\nend)\n", paths[obj], Event, args)
 			end
-
-			env.setclipboard(m .. m2)
+			updateEvents()
 		end
 
-		local function onClick(Event)
-			if not Event then return end
-			Event = Event:gsub(" 🟢", ""):gsub(" 🔴", "")
-			Checked[Event] = false
-			for i = 1, #sList do
-				local node = sList[i]
+		local function copyConnections(eventName)
+			local comments, templates = {}, {}
+			for _, node in selectedNodes do
 				local obj = node.Obj
-				for _, v in getconnections(obj[Event]) do
-					local s = v.Function and getfenv(v.Function)
-					if s then
-						Checked[Event] = true
-						break
+				local path = shortenPath(Explorer.GetInstancePath(obj))
+				table.insert(comments, `-- Connection: {path}.{eventName}`)
+
+				local signal = getSignal(obj, eventName)
+				local scripts = signal and getConnectedScripts(signal)
+				if scripts and #scripts > 0 then
+					table.insert(comments, "--[[\n\tScripts:")
+					for _, scr in scripts do
+						table.insert(comments, "\t" .. (scr and shortenPath(Explorer.GetInstancePath(scr)) or "<no script>"))
 					end
+					table.insert(comments, "--]]")
 				end
-				if Checked[Event] then
-					UpdateEvents()
-					return
-				end
-				Checked[Event] = false
+
+				local member = findMember(obj.ClassName, "Events", eventName)
+				table.insert(templates, string.format("%s.%s:Connect(function(%s)\n\nend)", path, eventName, parameterNames(member)))
 			end
-			UpdateEvents()
+			env.setclipboard(table.concat(comments, "\n") .. "\n" .. table.concat(templates, "\n") .. "\n")
 		end
 
-		UpdateEvents = function()
+		updateEvents = function()
 			context:Clear()
-
-			local lastCategory = ""
-			local alreadyAdded = {}
-			for class, objList in next, Classes do
-				local apiClass = API.Classes[class]
-				local rmdEntry = RMD.Classes[class]
-				local iconInd = rmdEntry and tonumber(rmdEntry.ExplorerImageIndex) or 0
-				local category = rmdEntry and rmdEntry.ClassCategory or "Uncategorized"
-
-				if lastCategory ~= class and apiClass and #apiClass.Events > 0 then
-					context:AddDivider(class)
-					lastCategory = class
-				end
-
-				if apiClass and #apiClass.Events > 0 then
-					for _, v in next, apiClass.Events do
-						if not Settings.Properties.ShowDeprecatedEvents and (v.Tags and v.Tags.Deprecated) then continue end
-						if table.find(alreadyAdded, v.Name) then continue end
-						table.insert(alreadyAdded, v.Name)
-						local name = (Checked[v.Name] ~= nil and Checked[v.Name] and (v.Name .. " 🟢")) or (Checked[v.Name] ~= nil and not Checked[v.Name] and (v.Name .. " 🔴")) or v.Name
-						context:Add({
-							Name = name,
-							IconMap = Explorer.ClassIcons,
-							Icon = iconInd,
-							OnClick = onClick,
-							OnRightClick = onRightClick,
-							NoHide = true,
-						})
-					end
-				end
-
-				if apiClass and apiClass.Superclass and #apiClass.Superclass.Events > 0 then
-					context:AddDivider(apiClass.Superclass.Name)
-					for _, v in next, apiClass.Superclass.Events do
-						if not Settings.Properties.ShowDeprecatedEvents and (v.Tags and v.Tags.Deprecated) then continue end
-						if table.find(alreadyAdded, v.Name) then continue end
-						table.insert(alreadyAdded, v.Name)
-						local name = (Checked[v.Name] ~= nil and Checked[v.Name] and (v.Name .. " 🟢")) or (Checked[v.Name] ~= nil and not Checked[v.Name] and (v.Name .. " 🔴")) or v.Name
-						context:Add({
-							Name = name,
-							IconMap = Explorer.ClassIcons,
-							Icon = 0,
-							OnClick = onClick,
-							OnRightClick = onRightClick,
-							NoHide = true,
-						})
-					end
-				end
-
-				context:AddDivider("Instance")
-				for _, v in next, API.Classes["Instance"].Events do
-					if not Settings.Properties.ShowDeprecatedEvents and (v.Tags and v.Tags.Deprecated) then continue end
-					if table.find(alreadyAdded, v.Name) then continue end
-					table.insert(alreadyAdded, v.Name)
-					local name = (Checked[v.Name] ~= nil and Checked[v.Name] and (v.Name .. " 🟢")) or (Checked[v.Name] ~= nil and not Checked[v.Name] and (v.Name .. " 🔴")) or v.Name
-					context:Add({
-						Name = name,
-						IconMap = Explorer.ClassIcons,
-						Icon = 0,
-						OnClick = onClick,
-						OnRightClick = onRightClick,
-						NoHide = true,
-					})
-				end
-			end
-
+			addClassMembers(context, selectedNodes, "Events", Settings.Properties.ShowDeprecatedEvents, function(member)
+				local status = checked[member.Name]
+				return {
+					Name = member.Name .. (status == true and " 🟢" or status == false and " 🔴" or ""),
+					OnClick = function() checkEvent(member.Name) end,
+					OnRightClick = function() copyConnections(member.Name) end,
+					NoHide = true,
+				}
+			end)
 			context:Refresh()
 		end
 
-		UpdateEvents()
+		updateEvents()
 		context:Show(x, y)
+	end
+
+	local MAX_REFERENCES = 500
+
+	-- Lists the tables and function upvalues that hold a reference to target
+	Explorer.FindReferences = function(target: Instance): string
+		local getgc = getgc or get_gc_objects
+		if not getgc then return "-- Get Lua References needs getgc" end
+		local getupvalues = (debug and debug.getupvalues) or getupvalues
+
+		local lines = { `-- Lua references to {shortenPath(Explorer.GetInstancePath(target))}`, "" }
+		local count = 0
+
+		local function add(line: string)
+			count += 1
+			table.insert(lines, line)
+		end
+
+		local objects = getgc(true)
+		for index, value in objects do
+			if count >= MAX_REFERENCES then break end
+			if index % 20000 == 0 then task.wait() end
+
+			local valueType = type(value)
+			if valueType == "table" then
+				-- Raw iteration: a __iter or __index metamethod must not run game code
+				for key, item in next, value do
+					if item == target then
+						add(`[table] key {tostring(key)} = <instance>`)
+					elseif key == target then
+						add(`[table] key <instance> = {typeof(item)}`)
+					end
+				end
+			elseif valueType == "function" and getupvalues and (not islclosure or islclosure(value)) then
+				local success, upvalues = pcall(getupvalues, value)
+				if success then
+					for upvalueIndex, upvalue in upvalues do
+						if upvalue == target then
+							local source, line, name = debug.info(value, "sln")
+							add(`[upvalue {upvalueIndex}] function {name ~= "" and name or "<anonymous>"} at {source}:{line}`)
+							break
+						end
+					end
+				end
+			end
+		end
+
+		if count == 0 then table.insert(lines, "-- No references found") end
+		if count >= MAX_REFERENCES then table.insert(lines, `-- Stopped after {MAX_REFERENCES} references`) end
+		return table.concat(lines, "\n")
 	end
 
 	Explorer.InitInsertObject = function()
@@ -2046,363 +2036,62 @@ local function main()
 		Explorer.InsertObjectContext = context
 	end
 
-	--[[
-		Headers, Setups, Predicate, ObjectDefs
-	]]
-	Explorer.SearchFilters = { -- TODO: Use data table (so we can disable some if funcs don't exist)
-		Comparison = {
-			["isa"] = function(argString)
-				local lower = string.lower
-				local find = string.find
-				local classQuery = string.split(argString)[1]
-				if not classQuery then return end
-				classQuery = lower(classQuery)
+	local SUGGESTION_ROW_HEIGHT = 20
+	local MAX_VISIBLE_SUGGESTIONS = 8
+	local LIVE_SEARCH_DELAY = 0.35
 
-				local className
-				for class, _ in pairs(API.Classes) do
-					local cName = lower(class)
-					if cName == classQuery then
-						className = class
-						break
-					elseif find(cName, classQuery, 1, true) then
-						className = class
-					end
-				end
-				if not className then return end
+	local function setSearchStatus(text: string?) Explorer.Window:SetTitle(text and `Explorer - {text}` or "Explorer") end
 
-				return {
-					Headers = { "local isa = game.IsA" },
-					Predicate = "isa(obj,'" .. className .. "')",
-				}
-			end,
-			["remotes"] = function(argString)
-				return {
-					Headers = { "local isa = game.IsA" },
-					Predicate = "isa(obj,'RemoteEvent') or isa(obj,'RemoteFunction')",
-				}
-			end,
-			["bindables"] = function(argString)
-				return {
-					Headers = { "local isa = game.IsA" },
-					Predicate = "isa(obj,'BindableEvent') or isa(obj,'BindableFunction')",
-				}
-			end,
-			["rad"] = function(argString)
-				local num = tonumber(argString)
-				if not num then return end
-
-				if not service.Players.LocalPlayer.Character or not service.Players.LocalPlayer.Character:FindFirstChild("HumanoidRootPart") or not service.Players.LocalPlayer.Character.HumanoidRootPart:IsA("BasePart") then return end
-
-				return {
-					Headers = { "local isa = game.IsA", "local hrp = service.Players.LocalPlayer.Character.HumanoidRootPart" },
-					Setups = { "local hrpPos = hrp.Position" },
-					ObjectDefs = { "local isBasePart = isa(obj,'BasePart')" },
-					Predicate = "(isBasePart and (obj.Position-hrpPos).Magnitude <= " .. num .. ")",
-				}
-			end,
-		},
-		Specific = {
-			["players"] = function()
-				return function() return service.Players:GetPlayers() end
-			end,
-			["loadedmodules"] = function() return env.getloadedmodules end,
-		},
-		Default = function(argString, caseSensitive)
-			local cleanString = argString:gsub('"', '\\"'):gsub("\n", "\\n")
-			if caseSensitive then
-				return {
-					Headers = { "local find = string.find" },
-					ObjectDefs = { "local objName = tostring(obj)" },
-					Predicate = 'find(objName,"' .. cleanString .. '",1,true)',
-				}
-			else
-				return {
-					Headers = { "local lower = string.lower", "local find = string.find", "local tostring = tostring" },
-					ObjectDefs = { "local lowerName = lower(tostring(obj))" },
-					Predicate = 'find(lowerName,"' .. cleanString:lower() .. '",1,true)',
-				}
-			end
-		end,
-		SpecificDefault = function(n)
-			return {
-				Headers = {},
-				ObjectDefs = { "local isSpec" .. n .. " = specResults[" .. n .. "][node]" },
-				Predicate = "isSpec" .. n,
-			}
-		end,
-	}
-
-	Explorer.BuildSearchFunc = function(query)
-		local specFilterList, specMap = {}, {}
-		local finalPredicate = ""
-		local rep = string.rep
-		local formatQuery = query:gsub("\\.", "  "):gsub('".-"', function(str) return rep(" ", #str) end)
-		local headers = {}
-		local objectDefs = {}
-		local setups = {}
-		local find = string.find
-		local sub = string.sub
-		local lower = string.lower
-		local match = string.match
-		local ops = {
-			["("] = "(",
-			[")"] = ")",
-			["||"] = " or ",
-			["&&"] = " and ",
-		}
-		local filterCount = 0
-		local compFilters = Explorer.SearchFilters.Comparison
-		local specFilters = Explorer.SearchFilters.Specific
-		local init = 1
-		local lastOp = nil
-
-		local function processFilter(dat)
-			if dat.Headers then
-				local t = dat.Headers
-				for i = 1, #t do
-					headers[t[i]] = true
-				end
-			end
-
-			if dat.ObjectDefs then
-				local t = dat.ObjectDefs
-				for i = 1, #t do
-					objectDefs[t[i]] = true
-				end
-			end
-
-			if dat.Setups then
-				local t = dat.Setups
-				for i = 1, #t do
-					setups[t[i]] = true
-				end
-			end
-
-			finalPredicate = finalPredicate .. dat.Predicate
+	-- Runs a search. A live search keeps the previous results when the query is incomplete.
+	Explorer.DoSearch = function(query: string, isLive: boolean?)
+		local predicate, err = SearchQuery.compile(query)
+		if #query > 0 and not predicate then
+			if not isLive then setSearchStatus(err) end
+			return
 		end
 
-		local found = {}
-		local foundData = {}
-		local find = string.find
-		local sub = string.sub
-
-		local function findAll(str, pattern)
-			local count = #found + 1
-			local init = 1
-			local sz = #pattern
-			local x, y, extra = find(str, pattern, init, true)
-			while x do
-				found[count] = x
-				foundData[x] = { sz, pattern }
-
-				count = count + 1
-				init = y + 1
-				x, y, extra = find(str, pattern, init, true)
-			end
-		end
-		local start = tick()
-		findAll(formatQuery, "&&")
-		findAll(formatQuery, "||")
-		findAll(formatQuery, "(")
-		findAll(formatQuery, ")")
-		table.sort(found)
-		table.insert(found, #formatQuery + 1)
-
-		local function inQuotes(str)
-			local len = #str
-			if sub(str, 1, 1) == '"' and sub(str, len, len) == '"' then return sub(str, 2, len - 1) end
-		end
-
-		for i = 1, #found do
-			local nextInd = found[i]
-			local nextData = foundData[nextInd] or { 1 }
-			local op = ops[nextData[2]]
-			local term = sub(query, init, nextInd - 1)
-			term = match(term, "^%s*(.-)%s*$") or "" -- Trim
-
-			if #term > 0 then
-				if sub(term, 1, 1) == "!" then
-					term = sub(term, 2)
-					finalPredicate = finalPredicate .. "not "
-				end
-
-				local qTerm = inQuotes(term)
-				if qTerm then
-					processFilter(Explorer.SearchFilters.Default(qTerm, true))
-				else
-					local x, y = find(term, "%S+")
-					if x then
-						local first = sub(term, x, y)
-						local specifier = sub(first, 1, 1) == "/" and lower(sub(first, 2))
-						local compFunc = specifier and compFilters[specifier]
-						local specFunc = specifier and specFilters[specifier]
-
-						if compFunc then
-							local argStr = sub(term, y + 2)
-							local ret = compFunc(inQuotes(argStr) or argStr)
-							if ret then
-								processFilter(ret)
-							else
-								finalPredicate = finalPredicate .. "false"
-							end
-						elseif specFunc then
-							local argStr = sub(term, y + 2)
-							local ret = specFunc(inQuotes(argStr) or argStr)
-							if ret then
-								if not specMap[term] then
-									specFilterList[#specFilterList + 1] = ret
-									specMap[term] = #specFilterList
-								end
-								processFilter(Explorer.SearchFilters.SpecificDefault(specMap[term]))
-							else
-								finalPredicate = finalPredicate .. "false"
-							end
-						else
-							processFilter(Explorer.SearchFilters.Default(term))
-						end
-					end
-				end
-			end
-
-			if op then
-				finalPredicate = finalPredicate .. op
-				if op == "(" and (#term > 0 or lastOp == ")") then -- Handle bracket glitch
-					return
-				else
-					lastOp = op
-				end
-			end
-			init = nextInd + nextData[1]
-		end
-
-		local finalSetups = ""
-		local finalHeaders = ""
-		local finalObjectDefs = ""
-
-		for setup, _ in next, setups do
-			finalSetups = finalSetups .. setup .. "\n"
-		end
-		for header, _ in next, headers do
-			finalHeaders = finalHeaders .. header .. "\n"
-		end
-		for oDef, _ in next, objectDefs do
-			finalObjectDefs = finalObjectDefs .. oDef .. "\n"
-		end
-
-		local template = [==[
-local searchResults = searchResults
-local nodes = nodes
-local expandTable = Explorer.SearchExpanded
-local specResults = specResults
-local service = service
-
-%s
-local function search(root)
-%s
-
-	local expandedpar = false
-	for i = 1,#root do
-		local node = root[i]
-		local obj = node.Obj
-
-%s
-
-		if %s then
-			expandTable[node] = 0
-			searchResults[node] = true
-			if not expandedpar then
-				local parnode = node.Parent
-				while parnode and (not searchResults[parnode] or expandTable[parnode] == 0) do
-					expandTable[parnode] = true
-					searchResults[parnode] = true
-					parnode = parnode.Parent
-				end
-				expandedpar = true
-			end
-		end
-
-		if #node > 0 then search(node) end
-	end
-end
-return search]==]
-
-		local funcStr = template:format(finalHeaders, finalSetups, finalObjectDefs, finalPredicate)
-		local s, func = pcall(loadstring, funcStr)
-		if not s or not func then return nil, specFilterList end
-
-		local env = setmetatable({ ["searchResults"] = searchResults, ["nodes"] = nodes, ["Explorer"] = Explorer, ["specResults"] = specResults, ["service"] = service }, { __index = getfenv() })
-		setfenv(func, env)
-
-		return func(), specFilterList
-	end
-
-	Explorer.DoSearch = function(query)
 		table.clear(Explorer.SearchExpanded)
 		table.clear(searchResults)
-		expanded = (#query == 0 and Explorer.Expanded or Explorer.SearchExpanded)
+		expanded = predicate and Explorer.SearchExpanded or Explorer.Expanded
 		searchFunc = nil
+		Explorer.SearchMatchCount = 0
 
-		if #query > 0 then
+		if predicate then
 			local expandTable = Explorer.SearchExpanded
-			local specFilters
 
-			local lower = string.lower
-			local find = string.find
-			local tostring = tostring
-
-			local lowerQuery = lower(query)
-
-			local function defaultSearch(root)
-				local expandedpar = false
+			local function search(root)
+				local expandedParent = false
 				for i = 1, #root do
 					local node = root[i]
 					local obj = node.Obj
 
-					if find(lower(tostring(obj)), lowerQuery, 1, true) then
+					if not node.Del and predicate(obj) then
+						Explorer.SearchMatchCount += 1
 						expandTable[node] = 0
 						searchResults[node] = true
-						if not expandedpar then
-							local parnode = node.Parent
-							while parnode and (not searchResults[parnode] or expandTable[parnode] == 0) do
-								expanded[parnode] = true
-								searchResults[parnode] = true
-								parnode = parnode.Parent
+						if not expandedParent then
+							local parentNode = node.Parent
+							while parentNode and (not searchResults[parentNode] or expandTable[parentNode] == 0) do
+								expandTable[parentNode] = true
+								searchResults[parentNode] = true
+								parentNode = parentNode.Parent
 							end
-							expandedpar = true
+							expandedParent = true
 						end
 					end
 
-					if #node > 0 then defaultSearch(node) end
+					if #node > 0 then search(node) end
 				end
 			end
 
-			if Main.Elevated then
-				local start = tick()
-				searchFunc, specFilters = Explorer.BuildSearchFunc(query)
-				--print("BUILD SEARCH",tick()-start)
-			else
-				searchFunc = defaultSearch
-			end
+			searchFunc = search
+			search(nodes[game])
+			search(nilNode)
 
-			if specFilters then
-				table.clear(specResults)
-				for i = 1, #specFilters do -- Specific search filers that returns list of matches
-					local resMap = {}
-					specResults[i] = resMap
-					local objs = specFilters[i]()
-					for c = 1, #objs do
-						local node = nodes[objs[c]]
-						if node then resMap[node] = true end
-					end
-				end
-			end
-
-			if searchFunc then
-				local start = tick()
-				searchFunc(nodes[game])
-				searchFunc(nilNode)
-				--warn(tick()-start)
-			end
+			local count = Explorer.SearchMatchCount
+			setSearchStatus(count == 1 and "1 match" or `{count} matches`)
+		else
+			setSearchStatus(nil)
 		end
 
 		Explorer.ForceUpdate()
@@ -2410,17 +2099,239 @@ return search]==]
 
 	Explorer.ClearSearch = function()
 		Explorer.GuiElems.SearchBar.Text = ""
-		expanded = Explorer.Expanded
-		searchFunc = nil
+		Explorer.DoSearch("")
+	end
+
+	-- Nodes that matched the search, without the ancestors expanded to show them
+	Explorer.GetSearchMatches = function()
+		local matches = {}
+		for node in searchResults do
+			if Explorer.SearchExpanded[node] == 0 then table.insert(matches, node) end
+		end
+		return matches
+	end
+
+	Explorer.InitSearchSuggestions = function(searchBox: TextBox)
+		local content = Explorer.Window.GuiElems.Content
+		local suggestions = {}
+		local rows = {}
+		local highlighted = 0
+		local keyConnection
+
+		local frame = Instance.new("Frame")
+		frame.Name = "SearchSuggestions"
+		frame.BackgroundColor3 = Settings.Theme.Menu
+		frame.BorderColor3 = Settings.Theme.Outline1
+		frame.Position = UDim2.new(0, 3, 0, 20)
+		frame.Visible = false
+		frame.ZIndex = 10
+		frame.Parent = content
+
+		local header = Instance.new("TextLabel")
+		header.BackgroundTransparency = 1
+		header.Font = Enum.Font.SourceSansBold
+		header.TextSize = 14
+		header.TextColor3 = Settings.Theme.PlaceholderText
+		header.TextXAlignment = Enum.TextXAlignment.Left
+		header.Position = UDim2.new(0, 6, 0, 0)
+		header.Size = UDim2.new(1, -12, 0, 18)
+		header.ZIndex = 11
+		header.Parent = frame
+
+		local list = Instance.new("ScrollingFrame")
+		list.BackgroundTransparency = 1
+		list.BorderSizePixel = 0
+		list.ScrollBarThickness = 4
+		list.ScrollBarImageColor3 = Settings.Theme.Highlight
+		list.ZIndex = 11
+		list.Parent = frame
+
+		local layout = Instance.new("UIListLayout")
+		layout.SortOrder = Enum.SortOrder.LayoutOrder
+		layout.Parent = list
+
+		local function paint()
+			for index, row in rows do
+				row.BackgroundTransparency = index == highlighted and 0 or 1
+			end
+		end
+
+		local function hide()
+			frame.Visible = false
+			highlighted = 0
+		end
+
+		local function accept(index: number)
+			local suggestion = suggestions[index]
+			if not suggestion then return end
+
+			searchBox.Text = suggestion.Text
+			searchBox:CaptureFocus()
+			searchBox.CursorPosition = #suggestion.Text + 1
+		end
+
+		local function getRow(index: number): TextButton
+			local row = rows[index]
+			if row then return row end
+
+			row = Instance.new("TextButton")
+			row.AutoButtonColor = false
+			row.Text = ""
+			row.BorderSizePixel = 0
+			row.BackgroundColor3 = Settings.Theme.ListSelection
+			row.BackgroundTransparency = 1
+			row.Size = UDim2.new(1, 0, 0, SUGGESTION_ROW_HEIGHT)
+			row.LayoutOrder = index
+			row.ZIndex = 12
+
+			local icon = Explorer.ClassIcons:GetLabel()
+			icon.Name = "Icon"
+			icon.Position = UDim2.new(0, 4, 0, 2)
+			icon.ZIndex = 13
+			icon.Parent = row
+
+			local label = Instance.new("TextLabel")
+			label.Name = "Label"
+			label.BackgroundTransparency = 1
+			label.Font = Enum.Font.SourceSans
+			label.TextSize = 14
+			label.TextColor3 = Settings.Theme.Text
+			label.TextXAlignment = Enum.TextXAlignment.Left
+			label.TextTruncate = Enum.TextTruncate.AtEnd
+			label.ZIndex = 13
+			label.Parent = row
+
+			row.MouseButton1Down:Connect(function() accept(index) end)
+			row.MouseEnter:Connect(function()
+				highlighted = index
+				paint()
+			end)
+
+			row.Parent = list
+			rows[index] = row
+			return row
+		end
+
+		local function scrollToHighlighted()
+			local top = (highlighted - 1) * SUGGESTION_ROW_HEIGHT
+			local viewHeight = list.AbsoluteSize.Y
+			if top < list.CanvasPosition.Y then
+				list.CanvasPosition = Vector2.new(0, top)
+			elseif top + SUGGESTION_ROW_HEIGHT > list.CanvasPosition.Y + viewHeight then
+				list.CanvasPosition = Vector2.new(0, top + SUGGESTION_ROW_HEIGHT - viewHeight)
+			end
+		end
+
+		local function refresh()
+			if not searchBox:IsFocused() then return hide() end
+
+			local headerText
+			suggestions, headerText = Suggest.get(searchBox.Text)
+			highlighted = 0
+			if #suggestions == 0 then return hide() end
+
+			for index, suggestion in suggestions do
+				local row = getRow(index)
+				local hasIcon = suggestion.ClassIcon ~= nil
+				row.Icon.Visible = hasIcon
+				if hasIcon then
+					local rmdEntry = RMD.Classes[suggestion.ClassIcon]
+					Explorer.ClassIcons:Display(row.Icon, rmdEntry and tonumber(rmdEntry.ExplorerImageIndex) or 0)
+				end
+				row.Label.Position = UDim2.new(0, hasIcon and 24 or 6, 0, 0)
+				row.Label.Size = UDim2.new(1, hasIcon and -28 or -10, 1, 0)
+				row.Label.Text = suggestion.Label
+				row.Visible = true
+			end
+			for index = #suggestions + 1, #rows do
+				rows[index].Visible = false
+			end
+			paint()
+
+			local headerHeight = headerText and 18 or 0
+			header.Visible = headerText ~= nil
+			header.Text = headerText or ""
+			list.Position = UDim2.new(0, 0, 0, headerHeight)
+			list.Size = UDim2.new(1, 0, 1, -headerHeight)
+			list.CanvasSize = UDim2.new(0, 0, 0, #suggestions * SUGGESTION_ROW_HEIGHT)
+			list.CanvasPosition = Vector2.zero
+			frame.Size = UDim2.new(1, -6, 0, headerHeight + math.min(#suggestions, MAX_VISIBLE_SUGGESTIONS) * SUGGESTION_ROW_HEIGHT)
+			frame.Visible = true
+		end
+
+		searchBox.Focused:Connect(function()
+			refresh()
+			if keyConnection then keyConnection:Disconnect() end
+			keyConnection = service.UserInputService.InputBegan:Connect(function(input)
+				if not frame.Visible or input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+
+				local keyCode = input.KeyCode
+				if keyCode == Enum.KeyCode.Down then
+					highlighted = math.min(#suggestions, highlighted + 1)
+				elseif keyCode == Enum.KeyCode.Up then
+					highlighted = math.max(1, highlighted - 1)
+				elseif keyCode == Enum.KeyCode.Tab then
+					accept(math.max(highlighted, 1))
+					return
+				else
+					return
+				end
+				paint()
+				scrollToHighlighted()
+			end)
+		end)
+
+		searchBox.FocusLost:Connect(function(enterPressed)
+			if keyConnection then
+				keyConnection:Disconnect()
+				keyConnection = nil
+			end
+
+			if enterPressed and frame.Visible and highlighted > 0 then
+				accept(highlighted)
+				return
+			end
+
+			-- Wait so a click on a suggestion row is handled before the list hides
+			task.delay(0.15, function()
+				if not searchBox:IsFocused() then hide() end
+			end)
+			if enterPressed then Explorer.DoSearch(searchBox.Text) end
+		end)
+
+		return refresh
 	end
 
 	Explorer.InitSearch = function()
 		local searchBox = Explorer.GuiElems.ToolBar.SearchFrame.SearchBox
 		Explorer.GuiElems.SearchBar = searchBox
+		searchBox.PlaceholderText = "Search (is:Part, Anchored=true, tag:...)"
 
 		Lib.ViewportTextBox.convert(searchBox)
+		local refreshSuggestions = Explorer.InitSearchSuggestions(searchBox)
 
-		searchBox.FocusLost:Connect(function() Explorer.DoSearch(searchBox.Text) end)
+		local searchId = 0
+		searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+			-- Tab accepts a suggestion and must not end up in the query
+			if string.find(searchBox.Text, "\t", 1, true) then
+				searchBox.Text = string.gsub(searchBox.Text, "\t", "")
+				return
+			end
+
+			refreshSuggestions()
+			if not Settings.Explorer.LiveSearch then return end
+
+			searchId += 1
+			local currentId = searchId
+			task.delay(LIVE_SEARCH_DELAY, function()
+				if currentId == searchId then Explorer.DoSearch(searchBox.Text, true) end
+			end)
+		end)
+
+		Explorer.GuiElems.ToolBar.SearchFrame.Reset.MouseButton1Click:Connect(function()
+			searchId += 1
+			Explorer.ClearSearch()
+		end)
 	end
 
 	Explorer.InitEntryTemplate = function()
@@ -2597,47 +2508,33 @@ return search]==]
 		Explorer.ClickSystem = sys
 	end
 
+	-- Compacts children lists after deletions. removeObject marks the parent instead of
+	-- shifting arrays on every removal, so bulk deletions stay cheap.
 	Explorer.InitDelCleaner = function()
-		coroutine.wrap(function()
-			local fw = Lib.FastWait
-			while true do
+		task.spawn(function()
+			while not Main.Destroyed do
 				local processed = false
-				local c = 0
-				for _, node in next, nodes do
-					if node.HasDel then
-						local delInd
-						for i = 1, #node do
-							if node[i].Del then
-								delInd = i
-								break
-							end
+				for node in pendingDelParents do
+					pendingDelParents[node] = nil
+					local writeIndex = 1
+					for readIndex = 1, #node do
+						local child = node[readIndex]
+						if not child.Del then
+							node[writeIndex] = child
+							writeIndex += 1
 						end
-						if delInd then
-							for i = delInd + 1, #node do
-								local cn = node[i]
-								if not cn.Del then
-									node[delInd] = cn
-									delInd = delInd + 1
-								end
-							end
-							for i = delInd, #node do
-								node[i] = nil
-							end
-						end
-						node.HasDel = false
-						processed = true
-						fw()
 					end
-					c = c + 1
-					if c > 10000 then
-						c = 0
-						fw()
+					for index = writeIndex, #node do
+						node[index] = nil
 					end
+					node.HasDel = false
+					processed = true
 				end
+
 				if processed and not refreshDebounce then Explorer.PerformRefresh() end
-				fw(0.5)
+				task.wait(0.5)
 			end
-		end)()
+		end)
 	end
 
 	Explorer.UpdateSelectionVisuals = function()
@@ -2710,6 +2607,20 @@ return search]==]
 				end
 			end
 		end
+	end
+
+	Explorer.Destroy = function()
+		for _, connection in { descendantAddedCon, descendantRemovingCon, itemChangedCon } do
+			connection:Disconnect()
+		end
+		for _, connections in nilCons do
+			for _, connection in connections do
+				connection:Disconnect()
+			end
+		end
+		table.clear(nilCons)
+		table.clear(pendingDelParents)
+		table.clear(nodes)
 	end
 
 	Explorer.Init = function()
