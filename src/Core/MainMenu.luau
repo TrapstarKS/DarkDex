@@ -25,6 +25,7 @@ export type AppData = {
 	Open: boolean?,
 	Window: any?,
 	Container: Instance?,
+	Momentary: boolean?, -- a button that runs OnClick without staying open
 	OnClick: ((isOpen: boolean) -> ())?,
 }
 
@@ -165,7 +166,13 @@ function MainMenu.CreateApp(data: AppData): AppControl?
 		button.BackgroundColor3 = Settings.Theme.Button
 	end)
 
-	button.MouseButton1Click:Connect(function() setOpen(not data.Open) end)
+	button.MouseButton1Click:Connect(function()
+		if data.Momentary then
+			if data.OnClick then data.OnClick(true) end
+			return
+		end
+		setOpen(not data.Open)
+	end)
 
 	local window = data.Window
 	if window then
@@ -231,74 +238,87 @@ local function selectNode(node)
 	Explorer.ViewNode(node)
 end
 
-local function createSelectionTools()
-	local clickPartConnection
+-- A visible part of a gui object, so transparent full-screen containers are skipped
+local function isDrawn(guiObject: GuiObject): boolean
+	if guiObject.BackgroundTransparency < 1 then return true end
+	if (guiObject:IsA("ImageLabel") or guiObject:IsA("ImageButton")) and guiObject.Image ~= "" and guiObject.ImageTransparency < 1 then return true end
+	if (guiObject:IsA("TextLabel") or guiObject:IsA("TextButton") or guiObject:IsA("TextBox")) and guiObject.Text ~= "" and guiObject.TextTransparency < 1 then return true end
+	return false
+end
+
+-- The topmost drawn gui object under the point, or the topmost one when none is drawn
+local function findGuiAt(position: Vector2): GuiObject?
+	local playerGui = plr:FindFirstChildWhichIsA("PlayerGui")
+	if not playerGui then return nil end
+
+	local firstWithNode
+	for _, guiObject in playerGui:GetGuiObjectsAtPosition(position.X, position.Y) do
+		if nodes[guiObject] then
+			if isDrawn(guiObject) then return guiObject end
+			firstWithNode = firstWithNode or guiObject
+		end
+	end
+	return firstWithNode
+end
+
+-- Click part/gui to select: a tool stays active until toggled off, and clicks on DarkDex
+-- windows are ignored so the explorer stays usable while it is on
+local function createClickTool(name: string, icon: string, pick: (InputObject) -> Instance?)
+	local connection
 	Main.CreateApp({
-		Name = "Click part to select",
-		IconMap = Main.LargeIcons,
-		Icon = 6,
+		Name = name,
+		IconMap = Main.MenuIcons or Main.LargeIcons,
+		Icon = Main.MenuIcons and icon or 6,
 		OnClick = function(isOpen)
-			if clickPartConnection then
-				clickPartConnection:Disconnect()
-				clickPartConnection = nil
+			if connection then
+				connection:Disconnect()
+				connection = nil
 			end
 			if not isOpen then return end
 
-			local mouse = Main.Mouse
-			clickPartConnection = Main.Track(mouse.Button1Down:Connect(function()
-				local node = mouse.Target and nodes[mouse.Target]
+			-- gameProcessed is not checked: clicks on game buttons are exactly what Click gui needs
+			connection = Main.Track(service.UserInputService.InputBegan:Connect(function(input)
+				if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+				local position = Vector2.new(input.Position.X, input.Position.Y)
+				if Main.IsDarkDexAt(position) then return end
+
+				local target = pick(input)
+				local node = target and nodes[target]
 				if node then selectNode(node) end
-			end))
-		end,
-	})
-
-	local clickGuiConnection
-	local clickGuiApp
-	clickGuiApp = Main.CreateApp({
-		Name = "Click gui to select",
-		IconMap = Main.LargeIcons,
-		Icon = 6,
-		OnClick = function(isOpen)
-			if clickGuiConnection then
-				clickGuiConnection:Disconnect()
-				clickGuiConnection = nil
-			end
-			if not isOpen then return end
-
-			clickGuiConnection = Main.Track(service.UserInputService.InputBegan:Connect(function(input, gameProcessed)
-				if input.UserInputType ~= Enum.UserInputType.MouseButton1 or gameProcessed then return end
-
-				local playerGui = plr:FindFirstChildWhichIsA("PlayerGui")
-				if not playerGui then return end
-
-				local position = input.Position
-				for _, guiObject in playerGui:GetGuiObjectsAtPosition(position.X, position.Y) do
-					local node = nodes[guiObject]
-					if node then
-						selectNode(node)
-						clickGuiApp.Disable()
-						return
-					end
-				end
 			end))
 		end,
 	})
 end
 
+local function createSelectionTools()
+	createClickTool("Click part to select", "Click_Part", function() return Main.Mouse.Target end)
+	createClickTool("Click gui to select", "Click_Gui", function(input) return findGuiAt(Vector2.new(input.Position.X, input.Position.Y)) end)
+end
+
 local function createRejoinApp()
 	Main.CreateApp({
 		Name = "Rejoin Server",
-		IconMap = Main.LargeIcons,
-		Icon = 9,
+		IconMap = Main.MenuIcons,
+		Icon = Main.MenuIcons and "Rejoin" or nil,
+		Momentary = true,
 		OnClick = function()
 			local TeleportService = service.TeleportService
-			if #service.Players:GetPlayers() <= 1 then
-				plr:Kick("Rejoining...")
-				task.wait()
-				TeleportService:Teleport(game.PlaceId, plr)
-			else
-				TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, plr)
+			local placeId, jobId = game.PlaceId, game.JobId
+
+			-- Alone, the server shuts down when we leave, so a new one is joined instead
+			if #service.Players:GetPlayers() <= 1 or game.PrivateServerId ~= "" then
+				TeleportService:Teleport(placeId, plr)
+				return
 			end
+
+			local failed
+			failed = TeleportService.TeleportInitFailed:Connect(function(player)
+				if player ~= plr then return end
+				failed:Disconnect()
+				TeleportService:Teleport(placeId, plr)
+			end)
+			Main.Track(failed)
+			TeleportService:TeleportToPlaceInstance(placeId, jobId, plr)
 		end,
 	})
 end

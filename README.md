@@ -6,7 +6,7 @@ reescrita em módulos Luau e empacotada num único arquivo com [darklua](https:/
 ## Executar
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/<usuario>/DarkDex/main/dist/DarkDex.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/TrapstarKS/DarkDex/main/dist/DarkDex.lua"))()
 ```
 
 Executar de novo substitui a instância anterior (GUIs e conexões são removidas).
@@ -66,3 +66,9 @@ Compatível com o filtro do Explorer do Studio, com autocomplete (↑/↓, Tab, 
 
 Atalhos com o mouse sobre o Explorer: Ctrl+C/X, Ctrl+Shift+V, Ctrl+D, Del, F2, Ctrl+G/U
 e Ctrl+A (seleciona os resultados da busca). Ctrl+Shift+X foca a busca.
+
+Botão direito numa propriedade: Copy Name, Copy Value, Copy as Lua (`workspace.Part.Size = Vector3.new(...)`)
+e Select in Explorer para propriedades que apontam para uma instância.
+
+Os ícones de classe e do menu vêm do Roblox Studio instalado: `python3 scripts/icons.py` regenera
+`src/Core/IconAtlas.luau` (requer Pillow).

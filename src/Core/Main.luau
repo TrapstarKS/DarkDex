@@ -6,9 +6,9 @@
 	executed again without restarting the game.
 ]]
 
-local ClassImages = require("@core/ClassImages")
 local Context = require("@core/Context")
 local Env = require("@core/Env")
+local Icons = require("@core/Icons")
 local Intro = require("@core/Intro")
 local MainMenu = require("@core/MainMenu")
 local PrettyPrint = require("@core/PrettyPrint")
@@ -55,6 +55,13 @@ end
 function Main.ShowGui(gui: ScreenGui)
 	-- Called on every window update, so only the first call protects and parents the gui
 	if shownGuis[gui] and gui.Parent then return end
+	if not shownGuis[gui] then
+		-- Some games scale every button that appears (hover "grow" effects) by inserting a
+		-- UIScale. DarkDex never uses UIScale, so any one inside its guis is foreign.
+		gui.DescendantAdded:Connect(function(descendant)
+			if descendant:IsA("UIScale") then task.defer(descendant.Destroy, descendant) end
+		end)
+	end
 	shownGuis[gui] = true
 
 	if env.gethui then
@@ -64,6 +71,31 @@ function Main.ShowGui(gui: ScreenGui)
 
 	if env.protectgui then env.protectgui(gui) end
 	gui.Parent = Main.GuiHolder
+end
+
+local function containsPoint(gui: Instance, point: Vector2): boolean
+	if not (gui:IsA("GuiObject") and gui.Visible) then return false end
+	local offset = point - gui.AbsolutePosition
+	return offset.X >= 0 and offset.Y >= 0 and offset.X <= gui.AbsoluteSize.X and offset.Y <= gui.AbsoluteSize.Y
+end
+
+-- Whether a DarkDex window or menu is under an InputObject position (which excludes the top
+-- bar inset). Windows are the top-level frames of each gui; the menu frame is a child of its button.
+function Main.IsDarkDexAt(inputPosition: Vector2): boolean
+	local inset = service.GuiService:GetGuiInset()
+	for gui in shownGuis do
+		if not gui.Enabled then continue end
+		local point = gui.IgnoreGuiInset and inputPosition + inset or inputPosition
+		for _, child in gui:GetChildren() do
+			if containsPoint(child, point) then return true end
+			if child:IsA("GuiObject") and child.Visible then
+				for _, grandchild in child:GetChildren() do
+					if containsPoint(grandchild, point) then return true end
+				end
+			end
+		end
+	end
+	return false
 end
 
 function Main.Destroy()
@@ -107,6 +139,7 @@ local function loadApps()
 end
 
 local function createIcons()
+	Main.MenuIcons = Icons.createMenuIconMap()
 	Main.MiscIcons = Context.Lib.IconMap.new("rbxassetid://6511490623", 256, 256, 16, 16)
 	Main.MiscIcons:SetDict({
 		Reference = 0,
@@ -171,9 +204,6 @@ function Main.Init()
 	local intro = Intro.create("Initializing Library")
 	LibModule.Main()
 	createIcons()
-
-	intro.SetProgress("Loading class icons", 0.2)
-	Main.ClassImages = ClassImages.resolve()
 
 	ReflectionData.load(intro.SetProgress)
 

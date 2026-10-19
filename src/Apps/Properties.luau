@@ -6,12 +6,14 @@
 
 local Context = require("@core/Context")
 local Create = require("@core/Create")
+local LuaValue = require("@core/LuaValue")
 
 local Main = Context.Main
 local Lib = Context.Lib
 local Apps = Context.Apps
 local Settings = Context.Settings
 local service = Context.service
+local env = Context.env
 local create = Create.create
 local CollectionService = service.CollectionService
 local API, RMD
@@ -713,24 +715,6 @@ local function main()
 
 		newEntry.Position = UDim2.new(0, 0, 0, 23 * (index - 1))
 
-		nameFrame.Expand.InputBegan:Connect(function(input)
-			local prop = viewList[index + Properties.Index]
-			if not prop or input.UserInputType ~= Enum.UserInputType.MouseMovement then return end
-
-			local fullName = (prop.CategoryName and "CAT_" .. prop.CategoryName) or prop.Class .. "." .. prop.Name .. (prop.SubName or "")
-
-			Main.MiscIcons:DisplayByKey(newEntry.NameFrame.Expand.Icon, expanded[fullName] and "Collapse_Over" or "Expand_Over")
-		end)
-
-		nameFrame.Expand.InputEnded:Connect(function(input)
-			local prop = viewList[index + Properties.Index]
-			if not prop or input.UserInputType ~= Enum.UserInputType.MouseMovement then return end
-
-			local fullName = (prop.CategoryName and "CAT_" .. prop.CategoryName) or prop.Class .. "." .. prop.Name .. (prop.SubName or "")
-
-			Main.MiscIcons:DisplayByKey(newEntry.NameFrame.Expand.Icon, expanded[fullName] and "Collapse" or "Expand")
-		end)
-
 		nameFrame.Expand.MouseButton1Down:Connect(function()
 			local prop = viewList[index + Properties.Index]
 			if not prop then return end
@@ -741,32 +725,6 @@ local function main()
 			expanded[fullName] = not expanded[fullName]
 			Properties.Update()
 			Properties.Refresh()
-		end)
-
-		nameFrame.PropName.InputBegan:Connect(function(input)
-			local prop = viewList[index + Properties.Index]
-			if not prop then return end
-			if input.UserInputType == Enum.UserInputType.MouseMovement and not nameFrame.PropName.TextFits then
-				local fullNameFrame = Properties.FullNameFrame
-				local nameArr = string.split(prop.Class .. "." .. prop.Name .. (prop.SubName or ""), ".")
-				local dispName = prop.DisplayName or nameArr[#nameArr]
-				local sizeX = service.TextService:GetTextSize(dispName, 14, Enum.Font.SourceSans, Vector2.new(math.huge, 20)).X
-
-				fullNameFrame.TextLabel.Text = dispName
-				--fullNameFrame.Position = UDim2.new(0,Properties.EntryIndent*(prop.Depth or 1) + Properties.EntryOffset,0,23*(index-1))
-				fullNameFrame.Size = UDim2.new(0, sizeX + 4, 0, 22)
-				fullNameFrame.Visible = true
-				Properties.FullNameFrameIndex = index
-				Properties.FullNameFrameAttach.SetData(fullNameFrame, { Target = nameFrame })
-				Properties.FullNameFrameAttach.Enable()
-			end
-		end)
-
-		nameFrame.PropName.InputEnded:Connect(function(input)
-			if input.UserInputType == Enum.UserInputType.MouseMovement and Properties.FullNameFrameIndex == index then
-				Properties.FullNameFrame.Visible = false
-				Properties.FullNameFrameAttach.Disable()
-			end
 		end)
 
 		valueFrame.ValueBox.MouseButton1Down:Connect(function()
@@ -966,6 +924,75 @@ local function main()
 		})
 
 		context:Show()
+	end
+
+	-- Right click on a property: copy its name, value or Lua, or select the instance it points to
+	Properties.DisplayPropContext = function(prop)
+		local context = Properties.PropContext
+		if not context then
+			context = Lib.ContextMenu.new()
+			context.Iconless = true
+			context.Width = 170
+			Properties.PropContext = context
+		end
+		context:Clear()
+
+		local obj = Properties.FindFirstObjWhichIsA(prop.Class)
+		local value = Properties.GetPropVal(prop, obj)
+		local name = (prop.IsAttribute or prop.IsTag) and prop.AttributeName or (prop.Name .. (prop.SubName or ""))
+
+		local function copy(text: string)
+			if env.setclipboard then env.setclipboard(text) end
+		end
+
+		if env.setclipboard then
+			context:Add({ Name = "Copy Name", OnClick = function() copy(name) end })
+			context:Add({
+				Name = "Copy Value",
+				OnClick = function() copy(typeof(value) == "Instance" and value:GetFullName() or Properties.ValueToString(prop, value)) end,
+			})
+			context:Add({
+				Name = "Copy as Lua",
+				OnClick = function()
+					local lua = LuaValue.toLua(value, Explorer.GetShortPath)
+					if not obj or prop.SubName then
+						copy(lua)
+					elseif prop.IsTag then
+						copy(`{Explorer.GetShortPath(obj)}:AddTag({lua})`)
+					elseif prop.IsAttribute then
+						copy(`{Explorer.GetShortPath(obj)}:SetAttribute({string.format("%q", prop.AttributeName)}, {lua})`)
+					else
+						copy(`{Explorer.GetShortPath(obj)}.{prop.Name} = {lua}`)
+					end
+				end,
+			})
+		end
+
+		if prop.IsTag then
+			local tag = prop.AttributeName
+			context:Add({ Name = "Find Tagged in Explorer", OnClick = function() Explorer.Search(`tag:{string.find(tag, "^[%w_]+$") and tag or string.format("%q", tag)}`) end })
+			context:Add({
+				Name = "Remove Tag",
+				OnClick = function()
+					for _, node in Explorer.Selection.List do
+						pcall(CollectionService.RemoveTag, CollectionService, node.Obj, tag)
+					end
+					Properties.ShowExplorerProps()
+				end,
+			})
+		end
+
+		if typeof(value) == "Instance" and Explorer.GetNode(value) then context:Add({
+			Name = "Select in Explorer",
+			OnClick = function()
+				local node = Explorer.GetNode(value)
+				if not node then return end
+				Explorer.Selection:Set(node)
+				Explorer.ViewNode(node)
+			end,
+		}) end
+
+		if #context.Items > 0 then context:Show() end
 	end
 
 	Properties.DisplayAddAttributeWindow = function(editAttr)
@@ -1404,10 +1431,6 @@ local function main()
 		end
 		table.clear(propCons)
 
-		-- Hide full name viewer
-		Properties.FullNameFrame.Visible = false
-		Properties.FullNameFrameAttach.Disable()
-
 		for i = 1, maxEntries do
 			local entryData = propEntries[i]
 			if not propEntries[i] then
@@ -1557,11 +1580,7 @@ local function main()
 
 					-- Expand
 					if prop.CategoryName or Properties.ExpandableTypes[prop.ValueType and prop.ValueType.Name] or Properties.ExpandableProps[gName] then
-						if Lib.CheckMouseInGui(expand) then
-							Main.MiscIcons:DisplayByKey(expand.Icon, expanded[gName] and "Collapse_Over" or "Expand_Over")
-						else
-							Main.MiscIcons:DisplayByKey(expand.Icon, expanded[gName] and "Collapse" or "Expand")
-						end
+						Main.MiscIcons:DisplayByKey(expand.Icon, expanded[gName] and "Collapse" or "Expand")
 						expand.Visible = true
 					else
 						expand.Visible = false
@@ -2050,17 +2069,6 @@ local function main()
 				},
 			},
 		})
-
-		local fullNameFrame = Lib.Frame.new()
-		local label = Lib.Label.new()
-		label.Parent = fullNameFrame.Gui
-		label.Position = UDim2.new(0, 2, 0, 0)
-		label.Size = UDim2.new(1, -4, 1, 0)
-		fullNameFrame.Visible = false
-		fullNameFrame.Parent = window.Gui
-
-		Properties.FullNameFrame = fullNameFrame
-		Properties.FullNameFrameAttach = Lib.AttachTo(fullNameFrame)
 	end
 
 	Properties.Init = function() -- TODO: MAKE BETTER
@@ -2163,6 +2171,20 @@ local function main()
 		Properties.GuiElems.PropsFrame = propsFrame
 
 		Properties.InitEntryStuff()
+
+		-- Right click menu. Listened globally: the value buttons of a row would sink a click on the row itself.
+		Main.Track(service.UserInputService.InputBegan:Connect(function(input)
+			if input.UserInputType ~= Enum.UserInputType.MouseButton2 or not window:IsContentVisible() then return end
+			if not Lib.CheckMouseInGui(propsFrame) then return end
+
+			for entryIndex, entry in propEntries do
+				if entry.Gui.Visible and Lib.CheckMouseInGui(entry.Gui) then
+					local prop = viewList[entryIndex + Properties.Index]
+					if prop and not prop.CategoryName then Properties.DisplayPropContext(prop) end
+					return
+				end
+			end
+		end))
 
 		-- Window events
 		window.GuiElems.Main:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()

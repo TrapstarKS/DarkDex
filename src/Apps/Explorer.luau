@@ -6,6 +6,7 @@
 
 local Context = require("@core/Context")
 local Create = require("@core/Create")
+local Icons = require("@core/Icons")
 local SaveInstance = require("@core/SaveInstance")
 local SearchQuery = require("@core/Search/Query")
 local Suggest = require("@core/Search/Suggest")
@@ -42,6 +43,18 @@ end
 local function main()
 	API, RMD = Context.API, Context.RMD
 	local Explorer: { [string]: any } = {}
+
+	local WHITE = Color3.new(1, 1, 1)
+
+	-- The Folder.IconTint set in Studio (black means no tint), shown on the white CustomFolder icon.
+	-- Nil with the legacy class icons, which have no white folder.
+	local function getIconTint(obj: Instance): Color3?
+		if obj.ClassName ~= "Folder" or not Explorer.ClassIcons.IndexDict.CustomFolder then return nil end
+		local success, tint = pcall(function() return (obj :: any).IconTint end)
+		if success and typeof(tint) == "Color3" and tint ~= Color3.new() then return tint end
+		return nil
+	end
+
 	local tree, listEntries, explorerOrders, searchResults = {}, {}, {}, {}
 	local expanded
 	local entryTemplate, treeFrame, toolBar, descendantAddedCon, descendantRemovingCon, itemChangedCon
@@ -689,11 +702,13 @@ local function main()
 
 				entry.Indent.EntryName.TextTruncate = (Settings.Explorer.UseNameWidth and Enum.TextTruncate.None or Enum.TextTruncate.AtEnd)
 
+				local icon = entry.Indent.Icon
+				local iconTint = getIconTint(obj)
+				icon.ImageColor3 = iconTint or WHITE
 				if (isa(obj, "LocalScript") or isa(obj, "Script")) and obj.Disabled then
-					Explorer.MiscIcons:DisplayByKey(entry.Indent.Icon, isa(obj, "LocalScript") and "LocalScript_Disabled" or "Script_Disabled")
+					Explorer.MiscIcons:DisplayByKey(icon, isa(obj, "LocalScript") and "LocalScript_Disabled" or "Script_Disabled")
 				else
-					local rmdEntry = RMD.Classes[obj.ClassName]
-					Explorer.ClassIcons:Display(entry.Indent.Icon, rmdEntry and rmdEntry.ExplorerImageIndex or 0)
+					Explorer.ClassIcons:DisplayByKey(icon, iconTint and "CustomFolder" or obj.ClassName)
 				end
 
 				if selection.Map[node] then
@@ -806,11 +821,17 @@ local function main()
 					moveObject(obj)
 				elseif prop == "Name" and nodes[obj] then
 					nodes[obj].NameWidth = nil
+				elseif prop == "IconTint" and nodes[obj] then
+					Explorer.Refresh()
 				end
 			end)
 		else
 			itemChangedCon = (game :: any).ItemChanged:Connect(function(obj, prop)
-				if prop == "Parent" and nodes[obj] then moveObject(obj) end
+				if prop == "Parent" and nodes[obj] then
+					moveObject(obj)
+				elseif prop == "IconTint" and nodes[obj] then
+					Explorer.Refresh()
+				end
 			end)
 		end
 	end
@@ -842,6 +863,9 @@ local function main()
 
 	Explorer.GetNode = function(obj: Instance) return nodes[obj] end
 
+	-- Lua path to obj with the workspace/LocalPlayer shortcuts, as used by Copy Path
+	Explorer.GetShortPath = function(obj: Instance): string return shortenPath(Explorer.GetInstancePath(obj)) end
+
 	Explorer.MakeNodeVisible = function(node, expandRoot)
 		if not node then return end
 
@@ -872,6 +896,8 @@ local function main()
 		local presentClasses = {}
 		local apiClasses = API.Classes
 
+		local Players = service.Players
+		local hasCharacter = false
 		for i = 1, #sList do
 			local node = sList[i]
 			local class = node.Class
@@ -879,6 +905,7 @@ local function main()
 				class = node.Obj.ClassName
 				node.Class = class
 			end
+			if not hasCharacter and class == "Model" then hasCharacter = Players:GetPlayerFromCharacter(node.Obj) ~= nil end
 			local curClass = apiClasses[class]
 			while curClass and not presentClasses[curClass.Name] do
 				presentClasses[curClass.Name] = true
@@ -923,13 +950,14 @@ local function main()
 			context:AddRegistered("TELEPORT_TO")
 			context:AddRegistered("VIEW_OBJECT")
 			context:AddRegistered("REQUEST_STREAM_AROUND")
-			context:AddRegistered("SELECT_PLAYER")
 		end
+		if hasCharacter then context:AddRegistered("SELECT_PLAYER") end
 
 		if presentClasses["TouchTransmitter"] then context:AddRegistered("FIRE_TOUCHTRANSMITTER", firetouchinterest == nil) end
 		if presentClasses["ClickDetector"] then context:AddRegistered("FIRE_CLICKDETECTOR", fireclickdetector == nil) end
 		if presentClasses["ProximityPrompt"] then context:AddRegistered("FIRE_PROXIMITYPROMPT", fireproximityprompt == nil) end
-		if presentClasses["Player"] or presentClasses["Workspace"] then context:AddRegistered("SELECT_CHARACTER") end
+		-- On Workspace it selects your own character
+		if presentClasses["Player"] or (presentClasses["Workspace"] and plr.Character) then context:AddRegistered("SELECT_CHARACTER") end
 		if presentClasses["Players"] then context:AddRegistered("SELECT_LOCAL_PLAYER") end
 		if presentClasses["LuaSourceContainer"] then
 			context:AddRegistered("VIEW_SCRIPT")
@@ -1209,7 +1237,7 @@ local function main()
 		context:Register("REQUEST_STREAM_AROUND", {
 			Name = "Request Stream Around",
 			IconMap = Explorer.ClassIcons,
-			Icon = 5,
+			Icon = "Camera",
 			OnClick = function()
 				local sList = selection.List
 				local isa = game.IsA
@@ -1271,6 +1299,8 @@ local function main()
 
 		context:Register("EXPAND_ALL", {
 			Name = "Expand All",
+			IconMap = Explorer.MiscIcons,
+			Icon = "Expand",
 			OnClick = function()
 				local sList = selection.List
 
@@ -1291,6 +1321,8 @@ local function main()
 
 		context:Register("COLLAPSE_ALL", {
 			Name = "Collapse All",
+			IconMap = Explorer.MiscIcons,
+			Icon = "Collapse",
 			OnClick = function()
 				local sList = selection.List
 
@@ -1321,6 +1353,8 @@ local function main()
 
 		context:Register("CLEAR_SEARCH_AND_JUMP_TO", {
 			Name = "Clear Search and Jump to",
+			IconMap = Explorer.MiscIcons,
+			Icon = "JumpToParent",
 			OnClick = function()
 				local newSelection = {}
 				local count = 1
@@ -1339,6 +1373,8 @@ local function main()
 
 		context:Register("COPY_PATH", {
 			Name = "Copy Path",
+			IconMap = Explorer.MiscIcons,
+			Icon = "Copy",
 			OnClick = function()
 				local sList = selection.List
 				if #sList == 1 then
@@ -1361,6 +1397,8 @@ local function main()
 
 		context:Register("COPY_NODE", {
 			Name = "Copy Node Info",
+			IconMap = Explorer.MiscIcons,
+			Icon = "Copy",
 			OnClick = function()
 				local lines = {}
 				for _, node in selection.List do
@@ -1385,7 +1423,7 @@ local function main()
 		context:Register("VIEW_FUNCTIONS", {
 			Name = "View Function",
 			IconMap = Explorer.ClassIcons,
-			Icon = 66,
+			Icon = "Function",
 			OnClick = function()
 				local mouse = Main.Mouse
 				local x, y = Explorer.LastRightClickX or mouse.X, Explorer.LastRightClickY or mouse.Y
@@ -1396,7 +1434,7 @@ local function main()
 		context:Register("GET_REFERENCES", {
 			Name = "Get Lua References",
 			IconMap = Explorer.ClassIcons,
-			Icon = 34,
+			Icon = "Reference",
 			OnClick = function()
 				local node = selection.List[1]
 				if not node then return end
@@ -1423,6 +1461,8 @@ local function main()
 
 		context:Register("VIEW_CONNECTIONS", {
 			Name = "View Connections",
+			IconMap = Explorer.ClassIcons,
+			Icon = "Event",
 			OnClick = function()
 				local mouse = Main.Mouse
 				local x, y = Explorer.LastRightClickX or mouse.X, Explorer.LastRightClickY or mouse.Y
@@ -1449,7 +1489,7 @@ local function main()
 		context:Register("VIEW_OBJECT", {
 			Name = "View Object (Right click to reset)",
 			IconMap = Explorer.ClassIcons,
-			Icon = 5,
+			Icon = "Camera",
 			OnClick = function()
 				local sList = selection.List
 				local isa = game.IsA
@@ -1469,7 +1509,7 @@ local function main()
 		context:Register("FIRE_TOUCHTRANSMITTER", {
 			Name = "Fire TouchTransmitter",
 			IconMap = Explorer.ClassIcons,
-			Icon = 37,
+			Icon = "Part",
 			OnClick = function()
 				local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
 				if not hrp then return end
@@ -1482,7 +1522,7 @@ local function main()
 		context:Register("FIRE_CLICKDETECTOR", {
 			Name = "Fire ClickDetector",
 			IconMap = Explorer.ClassIcons,
-			Icon = 41,
+			Icon = "ClickDetector",
 			OnClick = function()
 				local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
 				if not hrp then return end
@@ -1495,7 +1535,7 @@ local function main()
 		context:Register("FIRE_PROXIMITYPROMPT", {
 			Name = "Fire ProximityPrompt",
 			IconMap = Explorer.ClassIcons,
-			Icon = 124,
+			Icon = "ProximityPrompt",
 			OnClick = function()
 				local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
 				if not hrp then return end
@@ -1534,7 +1574,7 @@ local function main()
 		context:Register("SELECT_CHARACTER", {
 			Name = "Select Character",
 			IconMap = Explorer.ClassIcons,
-			Icon = 9,
+			Icon = "Player",
 			OnClick = function()
 				local newSelection = {}
 				local count = 1
@@ -1564,28 +1604,24 @@ local function main()
 		context:Register("SELECT_PLAYER", {
 			Name = "Select Player",
 			IconMap = Explorer.ClassIcons,
-			Icon = 9,
+			Icon = "Player",
 			OnClick = function()
-				local sList = selection.List
-				local isa = game.IsA
-
-				local node = sList[1]
-				if isa(node.Obj, "Model") then
-					for _, v in ipairs(service.Players:GetPlayers()) do
-						if v.Character == node.Obj then
-							selection:Set(nodes[v])
-							Explorer.ViewNode(nodes[v])
-							break
-						end
-					end
+				local newSelection = {}
+				for _, node in selection.List do
+					local player = node.Obj:IsA("Model") and service.Players:GetPlayerFromCharacter(node.Obj)
+					if player and nodes[player] then table.insert(newSelection, nodes[player]) end
 				end
+
+				if #newSelection == 0 then return end
+				selection:SetTable(newSelection)
+				Explorer.ViewNode(newSelection[1])
 			end,
 		})
 
 		context:Register("SELECT_LOCAL_PLAYER", {
 			Name = "Select Local Player",
 			IconMap = Explorer.ClassIcons,
-			Icon = 9,
+			Icon = "Player",
 			OnClick = function()
 				pcall(function()
 					if nodes[plr] then
@@ -1596,9 +1632,9 @@ local function main()
 			end,
 		})
 
-		context:Register("REFRESH_NIL", { Name = "Refresh Nil Instances", OnClick = function() Explorer.RefreshNilInstances() end })
+		context:Register("REFRESH_NIL", { Name = "Refresh Nil Instances", IconMap = Explorer.MiscIcons, Icon = "Redo", OnClick = function() Explorer.RefreshNilInstances() end })
 
-		context:Register("HIDE_NIL", { Name = "Hide Nil Instances", OnClick = function() Explorer.HideNilInstances() end })
+		context:Register("HIDE_NIL", { Name = "Hide Nil Instances", IconMap = Explorer.MiscIcons, Icon = "Collapse", OnClick = function() Explorer.HideNilInstances() end })
 
 		Explorer.RightClickContext = context
 	end
@@ -1702,7 +1738,8 @@ local function main()
 		local formatLuaString = Lib.FormatLuaString
 
 		while curObj do
-			if curObj == game then
+			-- Compared by class: the executor's game may be a different reference (cloneref)
+			if curObj.ClassName == "DataModel" then
 				path = "game" .. path
 				break
 			end
@@ -1724,7 +1761,7 @@ local function main()
 					local parCh = getCh(parObj)
 					local fcInd = tableFind(parCh, curObj)
 					indexName = ":GetChildren()[" .. fcInd .. "]"
-				elseif parObj == game and API.Classes[className] and API.Classes[className].Tags.Service then
+				elseif parObj.ClassName == "DataModel" and API.Classes[className] and API.Classes[className].Tags.Service then
 					indexName = ':GetService("' .. className .. '")'
 				end
 			elseif parObj == nil then
@@ -1791,8 +1828,7 @@ local function main()
 			seenClasses[className] = true
 
 			for _, apiClass in getClassChain(className) do
-				local rmdEntry = RMD.Classes[apiClass.Name]
-				local icon = rmdEntry and tonumber(rmdEntry.ExplorerImageIndex) or 0
+				local icon = apiClass.Name
 				local hasDivider = false
 
 				for _, member in apiClass[kind] do
@@ -1934,6 +1970,42 @@ local function main()
 	end
 
 	local MAX_REFERENCES = 500
+	local MAX_HOLDERS = 5
+
+	-- Every table and function reachable from DarkDex's own state, so its node, selection and
+	-- cache tables are not reported as references
+	local function collectOwned(getupvalues): { [any]: true }
+		local ownSource = debug.info(1, "s")
+		local owned = {}
+		local stack: { any } = { Context }
+		local visited = 0
+
+		while #stack > 0 do
+			local value = table.remove(stack)
+			if owned[value] then continue end
+
+			visited += 1
+			if visited % 20000 == 0 then task.wait() end
+
+			if type(value) == "table" then
+				owned[value] = true
+				for key, item in next, value do
+					if type(key) == "table" or type(key) == "function" then table.insert(stack, key) end
+					if type(item) == "table" or type(item) == "function" then table.insert(stack, item) end
+				end
+			elseif debug.info(value, "s") == ownSource then
+				owned[value] = true
+				local success, upvalues = pcall(getupvalues or function() return {} end, value)
+				if success then
+					for _, upvalue in upvalues do
+						if type(upvalue) == "table" or type(upvalue) == "function" then table.insert(stack, upvalue) end
+					end
+				end
+			end
+		end
+
+		return owned
+	end
 
 	-- Lists the tables and function upvalues that hold a reference to target
 	Explorer.FindReferences = function(target: Instance): string
@@ -1941,7 +2013,9 @@ local function main()
 		if not getgc then return "-- Get Lua References needs getgc" end
 		local getupvalues = (debug and debug.getupvalues) or getupvalues
 
-		local lines = { `-- Lua references to {shortenPath(Explorer.GetInstancePath(target))}`, "" }
+		-- A nil-parented path starts with the getNil helper, the header only needs the call
+		local path = string.match(shortenPath(Explorer.GetInstancePath(target)), "[^\n]*$")
+		local lines = { `-- Lua references to {path}`, "" }
 		local count = 0
 
 		local function add(line: string)
@@ -1950,30 +2024,87 @@ local function main()
 		end
 
 		local objects = getgc(true)
+		local owned = collectOwned(getupvalues)
+		owned[objects] = true
+
+		local function describeFunction(func): string
+			local source, line, name = debug.info(func, "sln")
+			return `function {name ~= "" and name or "<anonymous>"} at {source}:{line}`
+		end
+
+		local NO_UPVALUES = {}
+		local function getLuaUpvalues(func): { any }
+			if not getupvalues or (islclosure and not islclosure(func)) then return NO_UPVALUES end
+			local success, upvalues = pcall(getupvalues, func)
+			return if success and type(upvalues) == "table" then upvalues else NO_UPVALUES
+		end
+
+		-- Tables that hold the target, in the order found, with their description
+		local holderTables: { { Table: any, Text: string } } = {}
+
 		for index, value in objects do
 			if count >= MAX_REFERENCES then break end
 			if index % 20000 == 0 then task.wait() end
+			if owned[value] then continue end
 
-			local valueType = type(value)
-			if valueType == "table" then
+			if type(value) == "table" then
 				-- Raw iteration: a __iter or __index metamethod must not run game code
 				for key, item in next, value do
+					local text
 					if item == target then
-						add(`[table] key {tostring(key)} = <instance>`)
+						text = `[table] key {tostring(key)} = <instance>`
 					elseif key == target then
-						add(`[table] key <instance> = {typeof(item)}`)
+						text = `[table] key <instance> = {typeof(item)}`
+					end
+					if text then
+						count += 1
+						table.insert(holderTables, { Table = value, Text = text })
 					end
 				end
-			elseif valueType == "function" and getupvalues and (not islclosure or islclosure(value)) then
-				local success, upvalues = pcall(getupvalues, value)
-				if success then
-					for upvalueIndex, upvalue in upvalues do
-						if upvalue == target then
-							local source, line, name = debug.info(value, "sln")
-							add(`[upvalue {upvalueIndex}] function {name ~= "" and name or "<anonymous>"} at {source}:{line}`)
-							break
-						end
+			elseif type(value) == "function" then
+				for upvalueIndex, upvalue in getLuaUpvalues(value) do
+					if upvalue == target then
+						add(`[upvalue {upvalueIndex}] {describeFunction(value)}`)
+						break
 					end
+				end
+			end
+		end
+
+		-- Second pass: who keeps each of those tables alive. A table nobody holds is usually a
+		-- temporary one (e.g. a GetPlayers() result) still waiting for garbage collection.
+		if #holderTables > 0 then
+			local holdersOf: { [any]: { string } } = {}
+			for _, hit in holderTables do
+				holdersOf[hit.Table] = holdersOf[hit.Table] or {}
+			end
+
+			local function addHolder(held, text: string)
+				local holders = holdersOf[held]
+				if holders and #holders < MAX_HOLDERS then table.insert(holders, text) end
+			end
+
+			for index, value in objects do
+				if index % 20000 == 0 then task.wait() end
+				if owned[value] or holdersOf[value] then continue end
+
+				if type(value) == "table" then
+					for key, item in next, value do
+						if holdersOf[item] then addHolder(item, `table key {tostring(key)}`) end
+					end
+				elseif type(value) == "function" then
+					for upvalueIndex, upvalue in getLuaUpvalues(value) do
+						if holdersOf[upvalue] then addHolder(upvalue, `upvalue {upvalueIndex} of {describeFunction(value)}`) end
+					end
+				end
+			end
+
+			for _, hit in holderTables do
+				table.insert(lines, hit.Text)
+				local holders = holdersOf[hit.Table]
+				if #holders == 0 then table.insert(lines, "\t-- not held by any Lua table or function (likely temporary)") end
+				for _, holder in holders do
+					table.insert(lines, `\theld by {holder}`)
 				end
 			end
 		end
@@ -2025,15 +2156,13 @@ local function main()
 		local lastCategory = ""
 		for i = 1, #classes do
 			local class = classes[i][1]
-			local rmdEntry = RMD.Classes[class.Name]
-			local iconInd = rmdEntry and tonumber(rmdEntry.ExplorerImageIndex) or 0
 			local category = classes[i][2]
 
 			if lastCategory ~= category then
 				context:AddDivider(category)
 				lastCategory = category
 			end
-			context:Add({ Name = class.Name, IconMap = Explorer.ClassIcons, Icon = iconInd, OnClick = onClick })
+			context:Add({ Name = class.Name, IconMap = Explorer.ClassIcons, Icon = class.Name, OnClick = onClick })
 		end
 
 		Explorer.InsertObjectContext = context
@@ -2046,6 +2175,12 @@ local function main()
 	local function setSearchStatus(text: string?) Explorer.Window:SetTitle(text and `Explorer - {text}` or "Explorer") end
 
 	-- Runs a search. A live search keeps the previous results when the query is incomplete.
+	-- Fills the search box and runs the query, e.g. from another app
+	Explorer.Search = function(query: string)
+		Explorer.GuiElems.ToolBar.SearchFrame.SearchBox.Text = query
+		Explorer.DoSearch(query)
+	end
+
 	Explorer.DoSearch = function(query: string, isLive: boolean?)
 		local predicate, err = SearchQuery.compile(query)
 		if #query > 0 and not predicate then
@@ -2237,10 +2372,7 @@ local function main()
 				local row = getRow(index)
 				local hasIcon = suggestion.ClassIcon ~= nil
 				row.Icon.Visible = hasIcon
-				if hasIcon then
-					local rmdEntry = RMD.Classes[suggestion.ClassIcon]
-					Explorer.ClassIcons:Display(row.Icon, rmdEntry and tonumber(rmdEntry.ExplorerImageIndex) or 0)
-				end
+				if hasIcon then Explorer.ClassIcons:DisplayByKey(row.Icon, suggestion.ClassIcon) end
 				row.Label.Position = UDim2.new(0, hasIcon and 24 or 6, 0, 0)
 				row.Label.Size = UDim2.new(1, hasIcon and -28 or -10, 1, 0)
 				row.Label.Text = suggestion.Label
@@ -2441,7 +2573,7 @@ local function main()
 				{
 					BackgroundColor3 = Color3.new(1, 1, 1),
 					BackgroundTransparency = 1,
-					Image = Main.ClassImages,
+					Image = "",
 					ImageRectOffset = Vector2.new(304, 0),
 					ImageRectSize = Vector2.new(16, 16),
 					Name = "Icon",
@@ -2672,7 +2804,7 @@ local function main()
 	end
 
 	Explorer.Init = function()
-		Explorer.ClassIcons = Lib.IconMap.newLinear(Main.ClassImages, 16, 16)
+		Explorer.ClassIcons = Icons.createClassIconMap()
 		Explorer.MiscIcons = Main.MiscIcons
 
 		clipboard = {}

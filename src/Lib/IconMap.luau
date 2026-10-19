@@ -24,7 +24,8 @@ funcs.Display = function(self, obj, index)
 end
 
 funcs.DisplayByKey = function(self, obj, key)
-	if self.IndexDict[key] then self:Display(obj, self.IndexDict[key]) end
+	local index = self.IndexDict[key] or self.DefaultIndex
+	if index then self:Display(obj, index) end
 end
 
 funcs.SetDict = function(self, dict) self.IndexDict = dict end
