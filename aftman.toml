@@ -1,0 +1,5 @@
+[tools]
+darklua = "seaofvoices/darklua@0.17.3"
+selene = "kampfkarren/selene@0.29.0"
+stylua = "JohnnyMorganz/stylua@2.4.0"
+luau-lsp = "JohnnyMorganz/luau-lsp@1.63.0"

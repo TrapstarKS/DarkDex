@@ -1,0 +1,8 @@
+{
+	"languageMode": "nonstrict",
+	"aliases": {
+		"core": "src/Core",
+		"lib": "src/Lib",
+		"apps": "src/Apps"
+	}
+}

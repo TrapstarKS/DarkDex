@@ -1,0 +1,8 @@
+std = "customroblox+exploit"
+exclude = ["dist/*"]
+
+[lints]
+unused_variable = "warn"
+multiple_statements = "allow"
+undefined_variable = "warn"
+parenthese_conditions = "allow"

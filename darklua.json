@@ -1,0 +1,14 @@
+{
+	"bundle": {
+		"require_mode": {
+			"name": "path",
+			"sources": {
+				"@core": "./src/Core",
+				"@lib": "./src/Lib",
+				"@apps": "./src/Apps"
+			}
+		},
+		"modules_identifier": "__DARKDEX_MODULES"
+	},
+	"rules": ["remove_types"]
+}
