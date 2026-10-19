@@ -6,7 +6,6 @@ local service = Context.service
 local create = Create.create
 
 -- TODO: Convert to newer class model
-local funcs = {}
 
 local function new()
 	local newMt = setmetatable({}, {})
@@ -479,13 +478,13 @@ local function new()
 	window.Alignable = false
 	window:SetTitle("Color Picker")
 	window:Resize(450, 330)
-	for i, v in pairs(guiContents:GetChildren()) do
+	for _, v in pairs(guiContents:GetChildren()) do
 		v.Parent = window.GuiElems.Content
 	end
 	newMt.Window = window
 	newMt.Gui = window.Gui
 	local pickerGui = window.Gui.Main
-	local pickerTopBar = pickerGui.TopBar
+
 	local pickerFrame = pickerGui.Content
 	local colorSpace = pickerFrame.ColorSpaceFrame.ColorSpace
 	local colorStrip = pickerFrame.ColorStrip
@@ -494,7 +493,6 @@ local function new()
 	local customColorsFrame = pickerFrame.CustomColors
 	local okButton = pickerFrame.Ok
 	local cancelButton = pickerFrame.Cancel
-	local closeButton = pickerTopBar.Close
 
 	local colorScope = colorSpace.Scope
 	local colorArrow = pickerFrame.ArrowFrame.Arrow
@@ -568,7 +566,6 @@ local function new()
 
 	local function updateColor(noupdate)
 		local relativeX, relativeY, relativeStripY = 219 - hue * 219, 199 - sat * 199, 199 - val * 199
-		local hsvColor = Color3.fromHSV(hue, sat, val)
 
 		if noupdate == 2 or not noupdate then
 			hueInput.Text = tostring(math.ceil(359 * hue))
@@ -638,7 +635,7 @@ local function new()
 			if input.UserInputType == Enum.UserInputType.MouseMovement then
 				frame.ArrowFrame.Up.BackgroundTransparency = 0.5
 			elseif input.UserInputType == Enum.UserInputType.MouseButton1 then
-				local releaseEvent, runEvent
+				local releaseEvent
 
 				local startTime = os.clock()
 				local pressing = true
@@ -672,7 +669,7 @@ local function new()
 			if input.UserInputType == Enum.UserInputType.MouseMovement then
 				frame.ArrowFrame.Down.BackgroundTransparency = 0.5
 			elseif input.UserInputType == Enum.UserInputType.MouseButton1 then
-				local releaseEvent, runEvent
+				local releaseEvent
 
 				local startTime = os.clock()
 				local pressing = true
@@ -826,7 +823,7 @@ local function new()
 
 	local row = 0
 	local column = 0
-	for i, v in pairs(basicColors) do
+	for _, v in pairs(basicColors) do
 		local newColor = colorChoice:Clone()
 		newColor.BackgroundColor3 = v
 		newColor.Position = UDim2.new(0, 1 + 30 * column, 0, 21 + 23 * row)
@@ -898,7 +895,7 @@ local function new()
 
 	updateColor()
 
-	newMt.SetColor = function(self, color)
+	newMt.SetColor = function(_self, color)
 		red, green, blue = color.R, color.G, color.B
 		hue, sat, val = Color3.toHSV(color)
 		updateColor()

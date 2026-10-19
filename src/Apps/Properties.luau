@@ -15,16 +15,13 @@ local service = Context.service
 local create = Create.create
 local CollectionService = service.CollectionService
 local API, RMD
-local Explorer, Properties
+local Explorer
 
-local function initAfterMain()
-	Explorer = Apps.Explorer
-	Properties = Apps.Properties
-end
+local function initAfterMain() Explorer = Apps.Explorer end
 
 local function main()
 	API, RMD = Context.API, Context.RMD
-	local Properties = {}
+	local Properties: { [string]: any } = {}
 
 	local window, toolBar, propsFrame
 	local scrollV, scrollH
@@ -387,11 +384,9 @@ local function main()
 	-- Settings.Properties.ShowAttributes = true -- im making it true anyway since its useful by default and people complain
 	-- Settings.Properties.ShowTags = true
 	Properties.ShowExplorerProps = function()
-		local maxConflictCheck = Settings.Properties.MaxConflictCheck
 		local sList = Explorer.Selection.List
 		local foundClasses = {}
 		local propCount = 1
-		local elevated = Main.Elevated
 		local ShowDeprecatedProperties, ShowHiddenProperties = Settings.Properties.ShowDeprecatedProperties, Settings.Properties.ShowHiddenProperties
 		local Classes = API.Classes
 		local classLists = {}
@@ -402,7 +397,6 @@ local function main()
 		local showingAttrs = Settings.Properties.ShowAttributes
 		local foundAttrs = {}
 		local attrCount = 0
-		local getTags = CollectionService.GetTags
 		local maxTags = Settings.Properties.MaxTags
 		local showingTags = Settings.Properties.ShowTags
 		local foundTags = {}
@@ -1087,7 +1081,7 @@ local function main()
 		if not enum then return end
 
 		local sorted = {}
-		for name, enum in next, enum:GetEnumItems() do
+		for _, enum in next, enum:GetEnumItems() do
 			sorted[#sorted + 1] = enum
 		end
 		table.sort(sorted, function(a, b) return a.Name < b.Name end)
@@ -1128,7 +1122,7 @@ local function main()
 			editor.OnMoreColors:Connect(function() -- TODO: Special Case BasePart.BrickColor to BasePart.Color
 				editor:Close()
 				local colProp
-				for i, v in pairs(API.Classes.BasePart.Properties) do
+				for _, v in pairs(API.Classes.BasePart.Properties) do
 					if v.Name == "Color" then
 						colProp = v
 						break
@@ -1288,7 +1282,6 @@ local function main()
 	end
 
 	Properties.DisplayProp = function(prop, entryIndex)
-		local propName = prop.Name
 		local typeData = prop.ValueType
 		local typeName = typeData.Name
 		local tags = prop.Tags
@@ -1298,7 +1291,6 @@ local function main()
 		local UDim2 = UDim2
 
 		local guiElems = entryData.GuiElems
-		local valueFrame = guiElems.ValueFrame
 		local valueBox = guiElems.ValueBox
 		local colorButton = guiElems.ColorButton
 		local colorPreview = guiElems.ColorPreview
@@ -1402,7 +1394,6 @@ local function main()
 		local maxX = propsFrame.AbsoluteSize.X
 		local valueWidth = math.max(Properties.MinInputWidth, maxX - Properties.ViewWidth)
 		local inputPropVisible = false
-		local isa = game.IsA
 		local UDim2 = UDim2
 		local stringSplit = string.split
 		local scaleType = Settings.Properties.ScaleType
@@ -1432,7 +1423,6 @@ local function main()
 			local expand = guiElems.Expand
 			local valueBox = guiElems.ValueBox
 			local propNameBox = guiElems.PropName
-			local rightButton = guiElems.RightButton
 			local editAttributeButton = guiElems.EditAttributeButton
 			local toggleAttributes = guiElems.ToggleAttributes
 			-- local toggleTags = guiElems.ToggleTags
@@ -1602,7 +1592,6 @@ local function main()
 		local attributeName = prop.AttributeName
 		local rootTypeData = prop.RootType
 		local rootTypeName = rootTypeData and rootTypeData.Name
-		local fullName = prop.Class .. "." .. prop.Name .. (prop.SubName or "")
 		local Vector3 = Vector3
 
 		for i = 1, #sList do

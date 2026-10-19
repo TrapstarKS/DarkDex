@@ -8,12 +8,12 @@ local plr = Context.plr
 local create = Create.create
 
 local funcs = {}
-local static = { MinWidth = 200, FreeWidth = 200 }
+local static: { [string]: any } = { MinWidth = 200, FreeWidth = 200 }
 local mouse = plr:GetMouse()
 local sidesGui, alignIndicator
 local visibleWindows = {}
-local leftSide = { Width = 300, Windows = {}, ResizeCons = {}, Hidden = true }
-local rightSide = { Width = 300, Windows = {}, ResizeCons = {}, Hidden = true }
+local leftSide: { [string]: any } = { Width = 300, Windows = {}, ResizeCons = {}, Hidden = true }
+local rightSide: { [string]: any } = { Width = 300, Windows = {}, ResizeCons = {}, Hidden = true }
 
 local displayOrderStart
 local sideDisplayOrder
@@ -107,7 +107,7 @@ end
 local function sideHasRoom(side, neededSize)
 	local maxY = sidesGui.AbsoluteSize.Y - (math.max(0, #side.Windows - 1) * 4)
 	local inc = 0
-	for i, v in pairs(side.Windows) do
+	for _, v in pairs(side.Windows) do
 		inc = inc + (v.MinY or 100)
 		if inc > maxY - neededSize then return false end
 	end
@@ -554,7 +554,7 @@ end
 local function sideResized(side)
 	local currentPos = 0
 	local sideFramePos = getSideFramePos(side)
-	for i, v in pairs(side.Windows) do
+	for _, v in pairs(side.Windows) do
 		v.SizeX = side.Width
 		v.GuiElems.Main.Size = UDim2.new(0, side.Width, 0, v.SizeY)
 		v.GuiElems.Main.Position = UDim2.new(sideFramePos.X.Scale, sideFramePos.X.Offset, 0, currentPos)
@@ -660,10 +660,10 @@ local function renderSide(side, noTween) -- TODO: Use existing resizers
 	local currentPos = 0
 	local sideFramePos = getSideFramePos(side)
 	local template = side.WindowResizer:Clone()
-	for i, v in pairs(side.ResizeCons) do
+	for _, v in pairs(side.ResizeCons) do
 		v:Disconnect()
 	end
-	for i, v in pairs(side.Frame:GetChildren()) do
+	for _, v in pairs(side.Frame:GetChildren()) do
 		if v.Name == "WindowResizer" then v:Destroy() end
 	end
 	side.ResizeCons = {}
@@ -707,7 +707,7 @@ local function updateSide(side, noTween)
 	local windows = side.Windows
 	local height = sidesGui.AbsoluteSize.Y - (math.max(0, #windows - 1) * 4)
 
-	for i, v in pairs(windows) do
+	for _, v in pairs(windows) do
 		oldHeight = oldHeight + v.SizeY
 	end
 	for i, v in pairs(windows) do
@@ -854,7 +854,7 @@ funcs.Add = function(self, obj, name)
 	if name then self.Elements[name] = obj end
 end
 
-funcs.GetElement = function(self, obj, name) return self.Elements[name] end
+funcs.GetElement = function(self, _obj, name) return self.Elements[name] end
 
 funcs.AlignTo = function(self, side, pos, size, silent)
 	if table.find(side.Windows, self) or self.Closed then return end
@@ -862,7 +862,7 @@ funcs.AlignTo = function(self, side, pos, size, silent)
 	size = size or self.SizeY
 	if size > 0 and size <= 1 then
 		local totalSideHeight = 0
-		for i, v in pairs(side.Windows) do
+		for _, v in pairs(side.Windows) do
 			totalSideHeight = totalSideHeight + v.SizeY
 		end
 		self.SizeY = (totalSideHeight > 0 and totalSideHeight * size * 2) or size
@@ -874,7 +874,7 @@ funcs.AlignTo = function(self, side, pos, size, silent)
 	self.Side = side
 	self.SizeX = side.Width
 	self.Gui.DisplayOrder = sideDisplayOrder + 1
-	for i, v in pairs(side.Windows) do
+	for _, v in pairs(side.Windows) do
 		v.Gui.DisplayOrder = sideDisplayOrder
 	end
 	pos = math.min(#side.Windows + 1, pos or 1)
@@ -947,7 +947,7 @@ funcs.DoTween = function(self, ...)
 end
 
 funcs.StopTweens = function(self)
-	for i, v in pairs(self.Tweens) do
+	for _, v in pairs(self.Tweens) do
 		v:Cancel()
 	end
 	self.Tweens = {}
@@ -1020,7 +1020,7 @@ end
 static.ToggleSide = function(name)
 	local side = (name == "left" and leftSide or rightSide)
 	side.Hidden = not side.Hidden
-	for i, v in pairs(side.Windows) do
+	for _, v in pairs(side.Windows) do
 		if side.Hidden then
 			v.OnDeactivate:Fire()
 		else
@@ -1033,7 +1033,7 @@ end
 static.SetSideVisible = function(s, vis)
 	local side = (type(s) == "table" and s) or (s == "left" and leftSide or rightSide)
 	side.Hidden = not vis
-	for i, v in pairs(side.Windows) do
+	for _, v in pairs(side.Windows) do
 		if side.Hidden then
 			v.OnDeactivate:Fire()
 		else

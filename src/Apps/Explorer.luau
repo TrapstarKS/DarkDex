@@ -20,7 +20,7 @@ local plr = Context.plr
 local create = Create.create
 local nodes = Context.Nodes
 local API, RMD
-local Explorer, Properties, ScriptViewer
+local Properties, ScriptViewer
 local selection
 
 -- Shortens copied paths: workspace and the LocalPlayer instead of their full GetService paths
@@ -35,14 +35,13 @@ local function shortenPath(path: string): string
 end
 
 local function initAfterMain()
-	Explorer = Apps.Explorer
 	Properties = Apps.Properties
 	ScriptViewer = Apps.ScriptViewer
 end
 
 local function main()
 	API, RMD = Context.API, Context.RMD
-	local Explorer = {}
+	local Explorer: { [string]: any } = {}
 	local tree, listEntries, explorerOrders, searchResults = {}, {}, {}, {}
 	local expanded
 	local entryTemplate, treeFrame, toolBar, descendantAddedCon, descendantRemovingCon, itemChangedCon
@@ -274,6 +273,13 @@ local function main()
 				Explorer.PerformRefresh()
 			end
 		end
+	end
+
+	-- With deferred signals DescendantAdded runs later, so nodes for instances created by
+	-- the Explorer itself are added right away
+	local function ensureNode(obj: Instance)
+		if not nodes[obj] then addObject(obj) end
+		return nodes[obj]
 	end
 
 	Explorer.ViewWidth = 0
@@ -573,8 +579,6 @@ local function main()
 		local newEntry = entryTemplate:Clone()
 		newEntry.Position = UDim2.new(0, 0, 0, 20 * (index - 1))
 
-		local isRenaming = false
-
 		newEntry.InputBegan:Connect(function(input)
 			local node = tree[index + Explorer.Index]
 			if not node or selection.Map[node] or input.UserInputType ~= Enum.UserInputType.MouseMovement then return end
@@ -622,7 +626,6 @@ local function main()
 						if dist > 5 then
 							releaseEvent:Disconnect()
 							mouseEvent:Disconnect()
-							isRenaming = false
 							Explorer.StartDrag(listOffsetX, listOffsetY)
 						end
 					end
@@ -798,7 +801,7 @@ local function main()
 		end
 
 		if Settings.Explorer.UseNameWidth then
-			itemChangedCon = game.ItemChanged:Connect(function(obj, prop)
+			itemChangedCon = (game :: any).ItemChanged:Connect(function(obj, prop)
 				if prop == "Parent" and nodes[obj] then
 					moveObject(obj)
 				elseif prop == "Name" and nodes[obj] then
@@ -806,7 +809,7 @@ local function main()
 				end
 			end)
 		else
-			itemChangedCon = game.ItemChanged:Connect(function(obj, prop)
+			itemChangedCon = (game :: any).ItemChanged:Connect(function(obj, prop)
 				if prop == "Parent" and nodes[obj] then moveObject(obj) end
 			end)
 		end
@@ -1009,7 +1012,7 @@ local function main()
 						local cloned = clipboard[c]:Clone()
 						if cloned then
 							cloned.Parent = inst
-							local clonedNode = nodes[cloned]
+							local clonedNode = ensureNode(cloned)
 							if clonedNode then
 								newSelection[count] = clonedNode
 								count = count + 1
@@ -1042,7 +1045,7 @@ local function main()
 					local s, cloned = pcall(clone, inst)
 					if s and cloned then
 						cloned.Parent = instPar
-						local clonedNode = nodes[cloned]
+						local clonedNode = ensureNode(cloned)
 						if clonedNode then
 							newSelection[count] = clonedNode
 							count = count + 1
@@ -1099,9 +1102,10 @@ local function main()
 					pcall(function() sList[i].Obj.Parent = model end)
 				end
 
-				if nodes[model] then
-					selection:Set(nodes[model])
-					Explorer.ViewNode(nodes[model])
+				local modelNode = ensureNode(model)
+				if modelNode then
+					selection:Set(modelNode)
+					Explorer.ViewNode(modelNode)
 				end
 			end,
 		})
@@ -1137,7 +1141,7 @@ local function main()
 					pcall(node.Obj.Destroy, node.Obj)
 				end
 
-				for i, v in next, selection.List do
+				for _, v in next, selection.List do
 					if isa(v.Obj, "Model") then ungroup(v) end
 				end
 
@@ -1603,7 +1607,7 @@ local function main()
 		table.clear(nilMap)
 
 		local disconnectCon = Instance.new("Folder").ChildAdded:Connect(function() end).Disconnect
-		for i, v in next, nilCons do
+		for _, v in next, nilCons do
 			disconnectCon(v[1])
 			disconnectCon(v[2])
 		end
@@ -1693,7 +1697,6 @@ local function main()
 		local curObj = obj
 		local ts = tostring
 		local match = string.match
-		local gsub = string.gsub
 		local tableFind = table.find
 		local useGetCh = Settings.Explorer.CopyPathUseGetChildren
 		local formatLuaString = Lib.FormatLuaString
@@ -1993,7 +1996,7 @@ local function main()
 		})
 
 		local classes = {}
-		for i, class in next, API.Classes do
+		for _, class in next, API.Classes do
 			local tags = class.Tags
 			if not tags.NotCreatable and not tags.Service then
 				local rmdEntry = RMD.Classes[class.Name]
@@ -2334,6 +2337,53 @@ local function main()
 		end)
 	end
 
+	-- Keyboard shortcuts shown in the context menu. They act while the mouse is over the
+	-- Explorer and no text box is focused.
+	local SHORTCUTS = {
+		{ Key = Enum.KeyCode.X, Ctrl = true, Action = "CUT" },
+		{ Key = Enum.KeyCode.C, Ctrl = true, Action = "COPY" },
+		{ Key = Enum.KeyCode.V, Ctrl = true, Shift = true, Action = "PASTE" },
+		{ Key = Enum.KeyCode.D, Ctrl = true, Action = "DUPLICATE" },
+		{ Key = Enum.KeyCode.Delete, Action = "DELETE" },
+		{ Key = Enum.KeyCode.F2, Action = "RENAME" },
+		{ Key = Enum.KeyCode.G, Ctrl = true, Action = "GROUP" },
+		{ Key = Enum.KeyCode.U, Ctrl = true, Action = "UNGROUP" },
+	}
+
+	Explorer.InitShortcuts = function()
+		local UserInputService = service.UserInputService
+
+		Main.Track(UserInputService.InputBegan:Connect(function(input)
+			if input.UserInputType ~= Enum.UserInputType.Keyboard or UserInputService:GetFocusedTextBox() then return end
+
+			local isCtrl, isShift = Lib.IsCtrlDown(), Lib.IsShiftDown()
+
+			-- Same shortcut as Studio, works from anywhere
+			if input.KeyCode == Enum.KeyCode.X and isCtrl and isShift then
+				Explorer.GuiElems.SearchBar:CaptureFocus()
+				return
+			end
+
+			if not Explorer.Window:IsContentVisible() or not Lib.CheckMouseInGui(Explorer.Window.GuiElems.Main) then return end
+
+			if input.KeyCode == Enum.KeyCode.A and isCtrl and expanded == Explorer.SearchExpanded then
+				selection:SetTable(Explorer.GetSearchMatches())
+				Explorer.Refresh()
+				return
+			end
+
+			for _, shortcut in SHORTCUTS do
+				if input.KeyCode == shortcut.Key and (shortcut.Ctrl == true) == isCtrl and (shortcut.Shift == true) == isShift then
+					if shortcut.Action == "PASTE" and #clipboard == 0 then return end
+					if #selection.List == 0 then return end
+					Explorer.RightClickContext.Registered[shortcut.Action].OnClick()
+					Explorer.Refresh()
+					return
+				end
+			end
+		end))
+	end
+
 	Explorer.InitEntryTemplate = function()
 		entryTemplate = create({
 			{ 1, "TextButton", { AutoButtonColor = false, BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 1, BorderColor3 = Color3.new(0, 0, 0), Font = 3, Name = "Entry", Position = UDim2.new(0, 1, 0, 1), Size = UDim2.new(0, 250, 0, 20), Text = "", TextSize = 14 } },
@@ -2410,8 +2460,6 @@ local function main()
 			if not ind then return end
 			local node = tree[ind + Explorer.Index]
 			if not node then return end
-
-			local entry = listEntries[ind]
 
 			if button == 1 then
 				if combo == 2 then
@@ -2566,7 +2614,7 @@ local function main()
 		holder:ClearAllChildren()
 
 		-- Updates theme
-		for i, v in pairs(Explorer.SelectionVisualGui:GetChildren()) do
+		for _, v in pairs(Explorer.SelectionVisualGui:GetChildren()) do
 			v.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
 		end
 
@@ -2760,6 +2808,7 @@ local function main()
 		-- Init stuff that requires the window
 		Explorer.InitRenameBox()
 		Explorer.InitSearch()
+		Explorer.InitShortcuts()
 		Explorer.InitDelCleaner()
 		selection.Changed:Connect(Explorer.UpdateSelectionVisuals)
 
@@ -2813,7 +2862,7 @@ local function main()
 		else
 			for i = 1, #insts do
 				local obj = insts[i]
-				local s, parObj = pcall(ffa, obj, "Instance")
+				local _, parObj = pcall(ffa, obj, "Instance")
 				local par = nodes[parObj]
 				if not par then continue end
 				local newNode = {

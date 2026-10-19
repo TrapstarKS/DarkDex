@@ -3,7 +3,6 @@ local Create = require("@core/Create")
 
 local Lib = Context.Lib
 local Settings = Context.Settings
-local env = Context.env
 local service = Context.service
 local plr = Context.plr
 
@@ -172,7 +171,7 @@ local function initBuiltIn()
 		local envVal = env[name]
 		if type(envVal) == "table" then
 			local items = {}
-			for i, v in next, envVal do
+			for i, _ in next, envVal do
 				items[i] = true
 			end
 			builtIns[name] = items
@@ -555,7 +554,7 @@ funcs.DeleteRange = function(self, range, noprocess, updatemouse)
 	lines[selY + 1] = leftSub .. rightSub
 
 	local remove = table.remove
-	for i = 1, deltaLines do
+	for _ = 1, deltaLines do
 		remove(lines, selY + 2)
 	end
 
@@ -779,8 +778,6 @@ funcs.PreHighlight = function(self)
 
 	local newLines = self.NewLines
 	local curLine = 0
-	local lineTableCount = 1
-	local lineStart = 0
 	local lineEnd = 0
 	local lastEnding = 0
 	local foundHighlights = {}
@@ -855,7 +852,6 @@ funcs.HighlightLine = function(self, line)
 	local highlights = {}
 	local preHighlights = self.PreHighlights[line] or {}
 	local lineText = self.Lines[line] or ""
-	local lineLen = #lineText
 	local lastEnding = 0
 	local currentType = 0
 	local lastWord = nil
@@ -904,7 +900,7 @@ funcs.HighlightLine = function(self, line)
 					end
 
 					if wordType ~= 8 then
-						local x, y, br = find(lineText, "^%s*([%({\"'])", lastEnding + 1)
+						local x, _, br = find(lineText, "^%s*([%({\"'])", lastEnding + 1)
 						if x then
 							wordType = (funcStatus > 0 and br == "(" and 16) or 9
 							funcStatus = 0
@@ -1038,7 +1034,7 @@ funcs.Refresh = function(self)
 		local selPos2 = selectionRange[2]
 		local selRow, selColumn = selPos1[2], selPos1[1]
 		local sel2Row, sel2Column = selPos2[2], selPos2[1]
-		local selRelaX, selRelaY = viewX, relaY - 1
+		local selRelaY = relaY - 1
 
 		if selRelaY >= selPos1[2] and selRelaY <= selPos2[2] then
 			local fontSizeX = math.ceil(self.FontSize / 2)
@@ -1167,7 +1163,7 @@ funcs.ProcessTextChange = function(self)
 end
 
 -- Tabs are shown as tabReplacement in the editor so the cursor can step over them
-funcs.ConvertText = function(self, text, toEditor)
+funcs.ConvertText = function(_self, text, toEditor)
 	if toEditor then return (string.gsub(text, "\t", tabReplacement)) end
 	return (string.gsub(text, tabReplacement, "\t"))
 end

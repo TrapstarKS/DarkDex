@@ -240,12 +240,12 @@ local function new() -- TODO: Convert to newer class model
 	window:SetTitle("NumberSequence Editor")
 	newMt.Window = window
 	newMt.Gui = window.Gui
-	for i, v in pairs(guiContents:GetChildren()) do
+	for _, v in pairs(guiContents:GetChildren()) do
 		v.Parent = window.GuiElems.Content
 	end
 	local gui = window.Gui
 	local pickerGui = gui.Main
-	local pickerTopBar = pickerGui.TopBar
+
 	local pickerFrame = pickerGui.Content
 	local numberLine = pickerFrame.NumberLine
 	local numberLineOutlines = pickerFrame.NumberLineOutlines
@@ -255,7 +255,6 @@ local function new() -- TODO: Convert to newer class model
 	local deleteButton = pickerFrame.Delete
 	local resetButton = pickerFrame.Reset
 	local closeButton = pickerFrame.Close
-	local topClose = pickerTopBar.Close
 
 	local points = { { 1, 0, 3 }, { 8, 0.05, 1 }, { 5, 0.6, 2 }, { 4, 0.7, 4 }, { 6, 1, 4 } }
 	local lines = {}
@@ -339,7 +338,7 @@ local function new() -- TODO: Convert to newer class model
 
 	local function buildSequence()
 		local newPoints = {}
-		for i, v in pairs(points) do
+		for _, v in pairs(points) do
 			table.insert(newPoints, NumberSequenceKeypoint.new(v[2], v[1], v[3]))
 		end
 		newMt.Sequence = NumberSequence.new(newPoints)
@@ -449,7 +448,7 @@ local function new() -- TODO: Convert to newer class model
 
 		newSelect.InputBegan:Connect(function(input)
 			if input.UserInputType == Enum.UserInputType.MouseMovement then
-				for i, v in pairs(points) do
+				for _, v in pairs(points) do
 					v[4].Select.BackgroundTransparency = 1
 				end
 				newSelect.BackgroundTransparency = 0
@@ -487,7 +486,7 @@ local function new() -- TODO: Convert to newer class model
 						point[3] = math.min(oldEnvelope, maxEnvelope)
 						newMt:Redraw()
 						updateInputs(point)
-						for i, v in pairs(points) do
+						for _, v in pairs(points) do
 							v[4].Select.BackgroundTransparency = 1
 						end
 						newSelect.BackgroundTransparency = 0
@@ -501,15 +500,15 @@ local function new() -- TODO: Convert to newer class model
 	end
 
 	local function placePoints()
-		for i, v in pairs(points) do
+		for _, v in pairs(points) do
 			v[4] = placePoint(v)
 		end
 	end
 
-	local function redraw(self)
+	local function redraw(_self)
 		local numberLineSize = numberLine.AbsoluteSize
 		table.sort(points, function(a, b) return a[2] < b[2] end)
-		for i, v in pairs(points) do
+		for _, v in pairs(points) do
 			v[4].Position = UDim2.new(0, math.floor((numberLineSize.X - 1) * v[2]) - 2, 0, (numberLineSize.Y - 1) * (10 - v[1]) / 10 - 2)
 		end
 		lines[1].Size = UDim2.new(0, 1, 0, 0)
@@ -557,13 +556,13 @@ local function new() -- TODO: Convert to newer class model
 	end
 	newMt.Redraw = redraw
 
-	local function loadSequence(self, seq)
+	local function loadSequence(_self, seq)
 		resetSequence = seq
-		for i, v in pairs(points) do
+		for _, v in pairs(points) do
 			if v[4] then v[4]:Destroy() end
 		end
 		points = {}
-		for i, v in pairs(seq.Keypoints) do
+		for _, v in pairs(seq.Keypoints) do
 			local maxEnvelope = math.min(v.Value, 10 - v.Value)
 			local newPoint = { v.Value, v.Time, math.min(v.Envelope, maxEnvelope) }
 			newPoint[4] = placePoint(newPoint)
@@ -630,7 +629,7 @@ local function new() -- TODO: Convert to newer class model
 	numberLine.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 and #points < 20 then
 			if Lib.CheckMouseInGui(envelopeDragTop) or Lib.CheckMouseInGui(envelopeDragBottom) then return end
-			for i, v in pairs(points) do
+			for _, v in pairs(points) do
 				if Lib.CheckMouseInGui(v[4].Select) then return end
 			end
 			local maxX = numberLine.AbsoluteSize.X - 1
@@ -683,7 +682,7 @@ local function new() -- TODO: Convert to newer class model
 	placePoints()
 	redraw()
 
-	newMt.Show = function(self) window:Show() end
+	newMt.Show = function(_self) window:Show() end
 
 	return newMt
 end

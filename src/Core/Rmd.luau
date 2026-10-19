@@ -50,7 +50,7 @@ function Rmd.parse(rawXml: string): Rmd
 
 	for _, classNode in classList do
 		local className
-		local metadata: ClassMetadata
+		local metadata: any
 
 		for _, child in classNode.children do
 			if child.tag == "Properties" then

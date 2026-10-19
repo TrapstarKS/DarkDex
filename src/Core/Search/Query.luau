@@ -328,7 +328,9 @@ local function compileCommand(name: string, arg: string?): (Predicate?, string?)
 	return nil, `Unknown command /{name}`
 end
 
-local function compileNode(node: Parser.Node): Predicate
+local function compileNode(astNode: Parser.Node): Predicate
+	-- The old type solver cannot narrow the union by kind
+	local node = astNode :: any
 	local kind = node.kind
 	if kind == "and" then
 		local left, right = compileNode(node.left), compileNode(node.right)

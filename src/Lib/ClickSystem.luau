@@ -59,7 +59,7 @@ funcs.Remove = function(self, item)
 	local ind = table.find(self.Items, item)
 	if not ind then return end
 
-	for i, v in pairs(self.ItemCons[item]) do
+	for _, v in pairs(self.ItemCons[item]) do
 		v:Disconnect()
 	end
 	self.ItemCons[item] = nil

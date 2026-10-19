@@ -164,7 +164,7 @@ local function new()
 	window:SetTitle("ColorSequence Editor")
 	newMt.Window = window
 	newMt.Gui = window.Gui
-	for i, v in pairs(guiContents:GetChildren()) do
+	for _, v in pairs(guiContents:GetChildren()) do
 		v.Parent = window.GuiElems.Content
 	end
 	local gui = window.Gui
@@ -203,7 +203,7 @@ local function new()
 	local function buildSequence(noupdate)
 		local newPoints = {}
 		table.sort(colors, function(a, b) return a[2] < b[2] end)
-		for i, v in pairs(colors) do
+		for _, v in pairs(colors) do
 			table.insert(newPoints, ColorSequenceKeypoint.new(v[2], v[1]))
 		end
 		newMt.Sequence = ColorSequence.new(newPoints)
@@ -256,7 +256,6 @@ local function new()
 						local relativeX = mouse.X - colorLine.AbsolutePosition.X
 						if relativeX < 0 then relativeX = 0 end
 						if relativeX > maxSize then relativeX = maxSize end
-						local raw = relativeX / maxSize
 						point[2] = relativeX / maxSize
 						updateInputs(point)
 						cursor.Visible = true
@@ -276,12 +275,12 @@ local function new()
 	end
 
 	local function placeArrows()
-		for i, v in pairs(colors) do
+		for _, v in pairs(colors) do
 			v[3] = placeArrow(math.floor((colorLine.AbsoluteSize.X - 1) * v[2]) + 1, v)
 		end
 	end
 
-	local function redraw(self)
+	local function redraw(_self)
 		gradient.Color = newMt.Sequence or ColorSequence.new(Color3.new(1, 1, 1))
 
 		for i = 2, #colors do
@@ -292,14 +291,14 @@ local function new()
 	end
 	newMt.Redraw = redraw
 
-	local function loadSequence(self, seq)
+	local function loadSequence(_self, seq)
 		resetSequence = seq
-		for i, v in pairs(colors) do
+		for _, v in pairs(colors) do
 			if v[3] then v[3]:Destroy() end
 		end
 		colors = {}
 		currentlySelected = nil
-		for i, v in pairs(seq.Keypoints) do
+		for _, v in pairs(seq.Keypoints) do
 			local newPoint = { v.Value, v.Time }
 			newPoint[3] = placeArrow(v.Time, newPoint)
 			table.insert(colors, newPoint)
@@ -363,7 +362,7 @@ local function new()
 	colorLine.InputEnded:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseMovement then
 			local inArrow = false
-			for i, v in pairs(colors) do
+			for _, v in pairs(colors) do
 				if Lib.CheckMouseInGui(v[3]) then inArrow = v[3] end
 			end
 			cursor.Visible = inArrow and true or false
@@ -433,7 +432,7 @@ local function new()
 	placeArrows()
 	redraw()
 
-	newMt.Show = function(self) window:Show() end
+	newMt.Show = function(_self) window:Show() end
 
 	return newMt
 end

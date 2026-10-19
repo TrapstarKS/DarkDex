@@ -40,7 +40,12 @@ local function writeFile(path: string, contents: string)
 end
 
 local function getClientVersion(): string
-	local success, clientVersion = pcall(version)
+	-- GetRobloxVersion needs a RobloxScript capability that some executors do not have
+	local RunService = Context.service.RunService
+	local success, clientVersion = pcall(RunService.GetRobloxVersion, RunService)
+	if not success then
+		success, clientVersion = pcall(version)
+	end
 	return success and clientVersion or "unknown"
 end
 

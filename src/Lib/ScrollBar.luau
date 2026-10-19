@@ -12,7 +12,7 @@ local plr = Context.plr
 local createSimple = Create.createSimple
 
 local UserInputService = service.UserInputService
-local mouse = plr:GetMouse()
+local mouse: any = plr:GetMouse()
 
 local HOLD_DELAY = 0.3
 local MIN_THUMB_SIZE = 16
@@ -60,7 +60,7 @@ local function drawThumb(self: ScrollBar)
 	thumb.Visible = self:CanScrollUp() or self:CanScrollDown()
 	if not thumb.Visible then return end
 
-	local axis = self.Horizontal and "X" or "Y"
+	local axis: any = self.Horizontal and "X" or "Y"
 	local fraction = visible / total
 	thumb.Size = self.Horizontal and UDim2.new(fraction, 0, 1, 0) or UDim2.new(1, 0, fraction, 0)
 	if thumb.AbsoluteSize[axis] < MIN_THUMB_SIZE then thumb.Size = self.Horizontal and UDim2.new(0, MIN_THUMB_SIZE, 1, 0) or UDim2.new(1, 0, 0, MIN_THUMB_SIZE) end
@@ -117,7 +117,8 @@ local function bindArrowButton(self: ScrollBar, button: ImageButton, canScroll: 
 	end)
 end
 
-local function bindThumb(self: ScrollBar, thumb: Frame, thumbFrame: Frame)
+-- Vector2 is indexed by the axis name ("X" or "Y"), which the type checker cannot follow
+local function bindThumb(self: ScrollBar, thumb: any, thumbFrame: any)
 	local isDragging = false
 
 	thumb.InputBegan:Connect(function(input)
@@ -127,7 +128,7 @@ local function bindThumb(self: ScrollBar, thumb: Frame, thumbFrame: Frame)
 		end
 		if not isMouseButton1(input) then return end
 
-		local axis = self.Horizontal and "X" or "Y"
+		local axis: any = self.Horizontal and "X" or "Y"
 		local mouseOffset = mouse[axis] - thumb.AbsolutePosition[axis]
 		local lastPosition = nil
 		local moveConnection
@@ -172,7 +173,7 @@ local function bindThumb(self: ScrollBar, thumb: Frame, thumbFrame: Frame)
 	thumbFrame.InputBegan:Connect(function(input)
 		if not isMouseButton1(input) or Lib.CheckMouseInGui(thumb) then return end
 
-		local axis = self.Horizontal and "X" or "Y"
+		local axis: any = self.Horizontal and "X" or "Y"
 		local isForward = mouse[axis] >= thumb.AbsolutePosition[axis] + thumb.AbsoluteSize[axis]
 		local isHeld = true
 

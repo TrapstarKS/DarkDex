@@ -7,7 +7,7 @@
 
 local cloneref: <T>(T) -> T = cloneref or function(instance) return instance end
 
-local service: { [string]: any } = setmetatable({}, {
+local service: { [string]: any } = setmetatable({} :: any, {
 	__index = function(self, name: string)
 		local instance = cloneref(game:GetService(name))
 		rawset(self, name, instance)

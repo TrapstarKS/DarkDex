@@ -294,7 +294,7 @@ funcs.Clear = function(self)
 end
 
 funcs.Refresh = function(self)
-	for i, v in pairs(self.GuiElems.List:GetChildren()) do
+	for _, v in pairs(self.GuiElems.List:GetChildren()) do
 		if not v:IsA("UIListLayout") then v:Destroy() end
 	end
 	local map = {}

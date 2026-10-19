@@ -1,0 +1,8 @@
+{
+	"luau-lsp.platform.type": "roblox",
+	"luau-lsp.types.definitionFiles": {
+		"exploit": "types/exploit.d.luau",
+		"darkdex": "types/darkdex.d.luau"
+	},
+	"luau-lsp.diagnostics.strictDatamodelTypes": false
+}
